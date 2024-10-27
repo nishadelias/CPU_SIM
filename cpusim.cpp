@@ -1,3 +1,5 @@
+// file: cpusim.cpp
+
 #include "CPU.h"
 
 #include <iostream>
@@ -16,6 +18,9 @@ Add all the required standard and developed libraries here
 /*
 Put/Define any helper function/definitions you need here
 */
+
+
+
 int main(int argc, char* argv[])
 {
 	/* This is the front end of your project.
@@ -66,23 +71,43 @@ int main(int argc, char* argv[])
 	//Instruction myInst; 
 	
 	bool done = true;
+	string curr_instruction = "";
+	bool regWrite = false;
+	bool aluSrc = false;
+	bool branch = false;
+	bool memRe = false;
+	bool memWr = false;
+	bool memToReg = false;
+	bool upperIm = false;
+	int aluOp = 0;
+
+	unsigned int rd;
+    unsigned int funct3;
+    unsigned int rs1;
+    unsigned int rs2;
+    unsigned int funct7;
+
 	while (done == true) // processor's main loop. Each iteration is equal to one clock cycle.  
 	{
 		//fetch
-		
+		curr_instruction = myCPU.get_instruction(instMem);
+		cout << curr_instruction << endl;
 
 		// decode
+		done = myCPU.decode_instruction(curr_instruction, &regWrite, &aluSrc, &branch, & memRe, &memWr, &memToReg, &upperIm, &aluOp,
+			&rd, &funct3, &rs1, &rs2, &funct7);
 		
 		// ... 
 		myCPU.incPC();
-		if (myCPU.readPC() > maxPC)
+		if (myCPU.readPC() > maxPC) {
 			break;
+		}
 	}
 	int a0 =0;
 	int a1 =0;  
 	// print the results (you should replace a0 and a1 with your own variables that point to a0 and a1)
 	  cout << "(" << a0 << "," << a1 << ")" << endl;
-	
+
 	return 0;
 
 }
