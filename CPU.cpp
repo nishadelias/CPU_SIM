@@ -24,17 +24,17 @@ unsigned long CPU::readPC()
 }
 void CPU::incPC()
 {
-	PC++;
+	PC += 8;
 }
 
 string CPU::get_instruction(char *IM) {
 	string inst = "";
-	if (IM[PC*8] == '0' && IM[PC*8+1] == '0') {
+	if (IM[PC] == '0' && IM[PC+1] == '0') {
 		return "00000000";
 	}
 	for (int i  = 0; i < 4; i++) {
-		inst += IM[(PC*8) + 6 - (i*2)];
-		inst += IM[(PC*8) + 7 - (i*2)];
+		inst += IM[PC + 6 - (i*2)];
+		inst += IM[PC + 7 - (i*2)];
 	}
 	return inst;
 }
@@ -139,8 +139,7 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             *memWr = true;
             *memToReg = false;
             *upperIm = false;
-            
-            if (funct3 == 0x0) { // SB
+            if (*funct3 == 0x0) { // SB
                 *aluOp = 0xA;
             }
             else if (*funct3 == 0x2) { // SW
@@ -195,9 +194,8 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
 
 
 void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) {
-	
+    
 	unsigned int instruction = std::stoul(inst, nullptr, 16);
-
 
 	int32_t rs1_value = registers[rs1];  
 	int32_t rs2_value = registers[rs2];
@@ -221,7 +219,10 @@ void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) 
 	else if (opcode == 0x63) {
 		alu.execute(rs1_value, rs2_value, aluOp);
 		if (alu.isZero()) {
-			PC += immediate;  // Take branch
+
+			cout << "Branching forward " << immediate << " bytes" << endl << endl;
+			PC += immediate * 2 - 8;  // Take branch
+            // Subtract 8 because the incPC() will add this later
 		}
 	}
 
@@ -229,22 +230,31 @@ void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) 
         
         // Use ALU to calculate effective address (base + offset)
         int32_t effective_address = alu.execute(registers[rs1], immediate, aluOp); // ALU_OP for address calculation
-        
+        int32_t result = 0;
         if (aluOp == 0x8) { // LB
-            registers[rd] = read_memory(effective_address, true);
+			result = read_memory(effective_address, true);
+			cout << "Loading register " << rd << " with " << result << endl;
+            registers[rd] = result;
         } else if (aluOp == 0x9) { // LW
-            registers[rd] = read_memory(effective_address, false);
+			result = read_memory(effective_address, false);
+            cout << "Effective address: " << effective_address << endl;
+			cout << "Loading register " << rd << " with " << result << endl;
+            registers[rd] = result;
         }
     }
     else if (opcode == 0x23) { // Store instructions
         
         // Use ALU to calculate effective address (base + offset)
         int32_t effective_address = alu.execute(registers[rs1], immediate, aluOp); // ALU_OP for address calculation
-        
+
         if (aluOp == 0xa) { // SB
+            cout << "Storing byte of " << registers[rs2] << " to memory address " << effective_address << endl;
             write_memory(effective_address, registers[rs2], true);
+            cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
         } else if (aluOp == 0xb) { // SW
+			cout << "Storing word of " << registers[rs2] << " to memory address " << effective_address << endl;
             write_memory(effective_address, registers[rs2], false);
+            cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
         }
     }
 

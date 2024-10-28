@@ -104,7 +104,7 @@ int main(int argc, char* argv[])
 		
 		// ... 
 		myCPU.incPC();
-		if (myCPU.readPC() > maxPC) {
+		if (myCPU.readPC() > maxPC * 8) {
 			break;
 		}
 	}

@@ -1,6 +1,7 @@
 // file: ALU.cpp
 
 #include "ALU.h"
+#include<iostream>
 
 ALU::ALU() : zero_flag(false), result(0) {}
 
