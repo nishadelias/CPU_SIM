@@ -35,7 +35,7 @@ int main(int argc, char* argv[])
 
 
 	if (argc < 2) {
-		//cout << "No file name entered. Exiting...";
+		cout << "No file name entered. Exiting...";
 		return -1;
 	}
 
@@ -55,7 +55,6 @@ int main(int argc, char* argv[])
 			i++;
 			line2>>x;
 			instMem[i] = x; // be careful about hex
-			cout<<instMem[i]<<endl;
 			i++;
 		}
 	int maxPC= i/4; 
@@ -71,7 +70,6 @@ int main(int argc, char* argv[])
 	//Instruction myInst; 
 	
 	bool done = true;
-	string curr_instruction = "";
 	bool regWrite = false;
 	bool aluSrc = false;
 	bool branch = false;
@@ -81,6 +79,9 @@ int main(int argc, char* argv[])
 	bool upperIm = false;
 	int aluOp = 0;
 
+	string curr_instruction = "";
+
+	unsigned int opcode;
 	unsigned int rd;
     unsigned int funct3;
     unsigned int rs1;
@@ -91,11 +92,15 @@ int main(int argc, char* argv[])
 	{
 		//fetch
 		curr_instruction = myCPU.get_instruction(instMem);
+
 		cout << curr_instruction << endl;
 
 		// decode
 		done = myCPU.decode_instruction(curr_instruction, &regWrite, &aluSrc, &branch, & memRe, &memWr, &memToReg, &upperIm, &aluOp,
-			&rd, &funct3, &rs1, &rs2, &funct7);
+			&opcode, &rd, &funct3, &rs1, &rs2, &funct7);
+
+		// execute
+		myCPU.execute(rd, rs1, rs2, aluOp, opcode, curr_instruction);
 		
 		// ... 
 		myCPU.incPC();
@@ -103,8 +108,8 @@ int main(int argc, char* argv[])
 			break;
 		}
 	}
-	int a0 =0;
-	int a1 =0;  
+	int a0 = myCPU.get_register_value(10);
+	int a1 = myCPU.get_register_value(11);  
 	// print the results (you should replace a0 and a1 with your own variables that point to a0 and a1)
 	  cout << "(" << a0 << "," << a1 << ")" << endl;
 
