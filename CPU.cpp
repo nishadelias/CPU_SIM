@@ -24,9 +24,12 @@ unsigned long CPU::readPC()
 }
 void CPU::incPC()
 {
+    // 4 bytes is 8 hex values in the instruction array
 	PC += 8;
+
 }
 
+// returns the current instruction as a string
 string CPU::get_instruction(char *IM) {
 	string inst = "";
 	if (IM[PC] == '0' && IM[PC+1] == '0') {
@@ -39,12 +42,14 @@ string CPU::get_instruction(char *IM) {
 	return inst;
 }
 
+// returns the value of a specific register
 int CPU::get_register_value(int reg) {
 	if (reg < 0 || reg > 32)
 		return 0;
 	return static_cast<int>(registers[reg]);
 }
 
+// decodes an instruction to get control signals and decode the instruction into the necessary parts
 bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *branch, bool *memRe, bool *memWr, bool *memToReg, bool *upperIm, int *aluOp,
 	unsigned int *opcode, unsigned int *rd, unsigned int *funct3, unsigned int *rs1, unsigned int *rs2, unsigned int *funct7) {
 	    
@@ -181,7 +186,7 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             break;
 
         case 0x00: // NULL instruction (program end)
-			cout << "Program end" << endl;
+			// cout << "Program end" << endl;
 			return false;
 
         default:
@@ -192,7 +197,7 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
 
 }
 
-
+// executes instructions by updating register values, loading from memory, and storing in memory
 void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) {
     
 	unsigned int instruction = std::stoul(inst, nullptr, 16);
@@ -204,14 +209,14 @@ void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) 
 	// For R-type instructions
 	if (opcode == 0x33) {
 		int32_t result = alu.execute(rs1_value, rs2_value, aluOp);
-		cout << "R-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
+		// cout << "R-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
 		if (rd != 0)
 			registers[rd] = result;
 	}
 	// For I-type instructions
 	else if (opcode == 0x13) {
 		int32_t result = alu.execute(rs1_value, immediate, aluOp);
-		cout << "I-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
+		// cout << "I-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
 		if (rd != 0)
 			registers[rd] = result;
 	}
@@ -220,57 +225,64 @@ void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) 
 		alu.execute(rs1_value, rs2_value, aluOp);
 		if (alu.isZero()) {
 
-			cout << "Branching forward " << immediate << " bytes" << endl << endl;
+			// cout << "Branching forward " << immediate << " bytes" << endl << endl;
 			PC += immediate * 2 - 8;  // Take branch
             // Subtract 8 because the incPC() will add this later
 		}
 	}
 
+    // JAL
+    else if (opcode == 0x6f) {
+        registers[rd] = PC/2 + 4;
+        PC += immediate * 2 - 8;
+        // Subtract 8 because the incPC() will add this later
+    }
+
 	else if (opcode == 0x03) { // Load instructions
-        
         // Use ALU to calculate effective address (base + offset)
         int32_t effective_address = alu.execute(registers[rs1], immediate, aluOp); // ALU_OP for address calculation
         int32_t result = 0;
         if (aluOp == 0x8) { // LB
 			result = read_memory(effective_address, true);
-			cout << "Loading register " << rd << " with " << result << endl;
+			// cout << "Loading register " << rd << " with " << result << endl;
             registers[rd] = result;
         } else if (aluOp == 0x9) { // LW
 			result = read_memory(effective_address, false);
-            cout << "Effective address: " << effective_address << endl;
-			cout << "Loading register " << rd << " with " << result << endl;
+            // cout << "Effective address: " << effective_address << endl;
+			// cout << "Loading register " << rd << " with " << result << endl;
             registers[rd] = result;
         }
     }
+
     else if (opcode == 0x23) { // Store instructions
-        
         // Use ALU to calculate effective address (base + offset)
         int32_t effective_address = alu.execute(registers[rs1], immediate, aluOp); // ALU_OP for address calculation
 
         if (aluOp == 0xa) { // SB
-            cout << "Storing byte of " << registers[rs2] << " to memory address " << effective_address << endl;
+            // cout << "Storing byte of " << registers[rs2] << " to memory address " << effective_address << endl;
             write_memory(effective_address, registers[rs2], true);
-            cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
+            // cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
         } else if (aluOp == 0xb) { // SW
-			cout << "Storing word of " << registers[rs2] << " to memory address " << effective_address << endl;
+			// cout << "Storing word of " << registers[rs2] << " to memory address " << effective_address << endl;
             write_memory(effective_address, registers[rs2], false);
-            cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
+            // cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
         }
     }
 
+    // LUI
 	else if (opcode == 0x37) {
 		if (rd != 0) { // Don't write to x0
                 // For LUI, we just need to pass the immediate value through the ALU
                 // The immediate generation already handled the shifting
 				int32_t result = alu.execute(immediate, 0, aluOp);
-				cout << "U-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
+				// cout << "U-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
                 registers[rd] = result;
             }
 	}
 
 }
 
-
+// generates immediate for the given instruction
 int32_t CPU::generate_immediate(uint32_t instruction, int opcode) {
     int32_t imm = 0;
     
@@ -383,5 +395,3 @@ void CPU::write_memory(uint32_t address, int32_t value, bool is_byte) {
         }
     }
 }
-
-// Add other functions here ... 

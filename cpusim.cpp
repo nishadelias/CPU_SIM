@@ -11,25 +11,9 @@
 #include <sstream>
 using namespace std;
 
-/*
-Add all the required standard and developed libraries here
-*/
-
-/*
-Put/Define any helper function/definitions you need here
-*/
-
-
 
 int main(int argc, char* argv[])
 {
-	/* This is the front end of your project.
-	You need to first read the instructions that are stored in a file and load them into an instruction memory.
-	*/
-
-	/* Each cell should store 1 byte. You can define the memory either dynamically, or define it as a fixed size with size 4KB (i.e., 4096 lines). Each instruction is 32 bits (i.e., 4 lines, saved in little-endian mode).
-	Each line in the input file is stored as an hex and is 1 byte (each four lines are one instruction). You need to read the file line by line and store it into the memory. You may need a mechanism to convert these values to bits so that you can read opcodes, operands, etc.
-	*/
 
 	char instMem[4096];
 
@@ -58,17 +42,11 @@ int main(int argc, char* argv[])
 			i++;
 		}
 	int maxPC= i/4; 
-
-	/* Instantiate your CPU object here.  CPU class is the main class in this project that defines different components of the processor.
-	CPU class also has different functions for each stage (e.g., fetching an instruction, decoding, etc.).
-	*/
-
-	CPU myCPU;  // call the approriate constructor here to initialize the processor...  
-	// make sure to create a variable for PC and resets it to zero (e.g., unsigned int PC = 0); 
-
-	/* OPTIONAL: Instantiate your Instruction object here. */
-	//Instruction myInst; 
 	
+
+	CPU myCPU;  
+	
+	// Control signals
 	bool done = true;
 	bool regWrite = false;
 	bool aluSrc = false;
@@ -81,6 +59,7 @@ int main(int argc, char* argv[])
 
 	string curr_instruction = "";
 
+	// Decoded instruction
 	unsigned int opcode;
 	unsigned int rd;
     unsigned int funct3;
@@ -93,7 +72,7 @@ int main(int argc, char* argv[])
 		//fetch
 		curr_instruction = myCPU.get_instruction(instMem);
 
-		cout << curr_instruction << endl;
+		// cout << curr_instruction << endl;
 
 		// decode
 		done = myCPU.decode_instruction(curr_instruction, &regWrite, &aluSrc, &branch, & memRe, &memWr, &memToReg, &upperIm, &aluOp,
@@ -102,15 +81,16 @@ int main(int argc, char* argv[])
 		// execute
 		myCPU.execute(rd, rs1, rs2, aluOp, opcode, curr_instruction);
 		
-		// ... 
+		// increment PC
 		myCPU.incPC();
 		if (myCPU.readPC() > maxPC * 8) {
 			break;
 		}
 	}
-	int a0 = myCPU.get_register_value(10);
-	int a1 = myCPU.get_register_value(11);  
-	// print the results (you should replace a0 and a1 with your own variables that point to a0 and a1)
+	int a0 = myCPU.get_register_value(10);	// a0
+	int a1 = myCPU.get_register_value(11);  //a1
+	
+	// print the results 
 	  cout << "(" << a0 << "," << a1 << ")" << endl;
 
 	return 0;
