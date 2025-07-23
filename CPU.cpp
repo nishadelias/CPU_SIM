@@ -2,6 +2,7 @@
 
 #include "CPU.h"
 #include <iomanip>
+#include <iostream>
 
 
 CPU::CPU()
@@ -393,5 +394,13 @@ void CPU::write_memory(uint32_t address, int32_t value, bool is_byte) {
         for (int i = 0; i < 4; i++) {
             dmemory[address + i] = (value >> (i * 8)) & 0xFF;
         }
+    }
+}
+
+
+void CPU::print_all_registers() {
+    std::cout << "Register Values:" << std::endl;
+    for (int i = 0; i < 32; i++) {
+        std::cout << REGISTER_NAMES[i] << ": " << registers[i] << std::endl;
     }
 }
