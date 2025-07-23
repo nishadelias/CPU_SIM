@@ -22,6 +22,10 @@ private:
     int dmemory[MEMORY_SIZE]; 	//data memory byte addressable in little endian fashion;
 	unsigned long PC; //pc 
 	int32_t registers[32];
+	const string REGISTER_NAMES[32] = {"Zero","ra","sp","gp","tp","t0","t1","t2",
+									"s0/fp","s1","a0","a1","a2","a3","a4","a5",
+									"a6","a7","s2","s3","s4","s5","s6","s7",
+									"s8","s9","s10","s11","t3","t4","t5","t6"};
 	ALU alu;
 
 	int32_t generate_immediate(uint32_t instruction, int opcode);	// Generates the immediate value for a given instruction based on its opcode
@@ -41,6 +45,7 @@ public:
 
 	int32_t read_memory(uint32_t address, bool is_byte);				// Reads a byte or word from memory at the specified address
     void write_memory(uint32_t address, int32_t value, bool is_byte);	// Writes a byte or word to memory at the specified address.
+	void print_all_registers();
 	
 };
 

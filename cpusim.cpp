@@ -91,7 +91,7 @@ int main(int argc, char* argv[])
 	int a1 = myCPU.get_register_value(11);  //a1
 	
 	// print the results 
-	  cout << "(" << a0 << "," << a1 << ")" << endl;
+	  myCPU.print_all_registers();
 
 	return 0;
 
