@@ -399,6 +399,7 @@ void CPU::write_memory(uint32_t address, int32_t value, bool is_byte) {
 
 
 void CPU::print_all_registers() {
+    std::cout << "Register Values:" << std::endl;
     for (int i = 0; i < 32; i++) {
         std::cout << REGISTER_NAMES[i] << ": " << registers[i] << std::endl;
     }
