@@ -6,7 +6,7 @@ ALU::ALU() : zero_flag(false), result(0) {}
 
 int32_t ALU::execute(int32_t operand1, int32_t operand2, int aluOp) {
     switch(aluOp) {
-        case 0x0: // ADD
+        case 0x0: // ADD, AUIPC
         case 0x8: // LB/SB address calculation
         case 0x9: // LW/SW address calculation
         case 0xA: // SB address calculation
@@ -30,6 +30,10 @@ int32_t ALU::execute(int32_t operand1, int32_t operand2, int aluOp) {
             
         case 0x6: // ORI
             result = operand1 | operand2;
+            break;
+
+        case 0x7: // AND, ANDI
+            result = operand1 & operand2;
             break;
             
         case 0xC: // BEQ comparison

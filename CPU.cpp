@@ -98,6 +98,9 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             if (*funct3 == 0x0 && *funct7 == 0x00) { // ADD
                 *aluOp = 0x0;
             }
+            else if (*funct3 == 0x7 && *funct7 == 0x00) { // AND
+                *aluOp = 0x7;
+            }
             else if (*funct3 == 0x4) { // XOR
                 *aluOp = 0x4;
             }
@@ -112,6 +115,9 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             *memToReg = false;
             *upperIm = false;
             
+            if (*funct3 == 0x7) { // ANDI
+                *aluOp = 0x7;
+            }
             if (*funct3 == 0x5 && *funct7 == 0x20) { // SRAI
                 *aluOp = 0x5;
             }
@@ -184,6 +190,17 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             *memToReg = false;
             *upperIm = true;
             *aluOp = 0xE;
+            break;
+
+        case 0x17: //AUIPC
+            *regWrite = true;
+            *aluSrc = true;
+            *branch = false;
+            *memRe = false;
+            *memWr = false;
+            *memToReg = false;
+            *upperIm = true;
+            *aluOp = 0x0;
             break;
 
         case 0x00: // NULL instruction (program end)
@@ -281,6 +298,13 @@ void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) 
             }
 	}
 
+    // AUIPC
+    else if (opcode == 0x17) {
+        int32_t result = alu.execute(PC, immediate, aluOp);
+        // cout << "AUIPC instruction" << endl << "Register " << rd << " is being set to " << result << endl;
+        registers[rd] = result;
+    }
+
 }
 
 // generates immediate for the given instruction
@@ -328,6 +352,7 @@ int32_t CPU::generate_immediate(uint32_t instruction, int opcode) {
             break;
             
         case 0x37: // LUI
+        case 0x17: //AUIPC
             // Upper immediate - already shifted
             imm = instruction & 0xFFFFF000;
             break;
