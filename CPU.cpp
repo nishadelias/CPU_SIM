@@ -25,21 +25,19 @@ unsigned long CPU::readPC()
 }
 void CPU::incPC()
 {
-    // 4 bytes is 8 hex values in the instruction array
-	PC += 8;
-
+	PC += 4;
 }
 
 // returns the current instruction as a string
 string CPU::get_instruction(char *IM) {
 	string inst = "";
-	if (IM[PC] == '0' && IM[PC+1] == '0') {
+	if (IM[PC*2] == '0' && IM[PC*2+1] == '0') {
 		return "00000000";
 	}
-	for (int i  = 0; i < 4; i++) {
-		inst += IM[PC + 6 - (i*2)];
-		inst += IM[PC + 7 - (i*2)];
-	}
+    for (int i = 0; i < 4; i++) {
+        inst += IM[PC*2 + 6 - i*2];
+        inst += IM[PC*2 + 7 - i*2];
+    }
 	return inst;
 }
 
@@ -96,10 +94,10 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             *upperIm = false;
             
             if (*funct3 == 0x0 && *funct7 == 0x00) { // ADD
-                *aluOp = 0x0;
+                *aluOp = 0x00;
             }
             else if (*funct3 == 0x7 && *funct7 == 0x00) { // AND
-                *aluOp = 0x7;
+                *aluOp = 0x10;
             }
             else if (*funct3 == 0x4) { // XOR
                 *aluOp = 0x4;
@@ -115,10 +113,13 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             *memToReg = false;
             *upperIm = false;
             
-            if (*funct3 == 0x7) { // ANDI
-                *aluOp = 0x7;
+            if (*funct3 == 0x0) // ADDI
+                *aluOp = 0x00;
+
+            else if (*funct3 == 0x7) { // ANDI
+                *aluOp = 0x10;
             }
-            if (*funct3 == 0x5 && *funct7 == 0x20) { // SRAI
+            else if (*funct3 == 0x5 && *funct7 == 0x20) { // SRAI
                 *aluOp = 0x5;
             }
             else if (*funct3 == 0x6) { // ORI
@@ -167,18 +168,31 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             *memWr = false;
             *memToReg = false;
             *upperIm = false;
-            *aluOp = 0xC;
-            break;
 
+            if (*funct3 == 0x0) // BEQ
+                *aluOp = 0x30;
+            else if (*funct3 == 0x5) // BGE
+                *aluOp = 0x31;
+            else if (*funct3 == 0x7) // BGEU
+                *aluOp = 0x32;
+            else if (*funct3 == 0x4) // BLT
+                *aluOp = 0x33;
+            else if (*funct3 == 0x4) // BLTU
+                *aluOp = 0x34;
+            else if (*funct3 == 0x4) // BNE
+                *aluOp = 0x35;
+            break;
+        
+        case 0x67: // JALR
         case 0x6F: // JAL
             *regWrite = true;
-            *aluSrc = false;
+            *aluSrc = true;
             *branch = true;
             *memRe = false;
             *memWr = false;
             *memToReg = false;
             *upperIm = false;
-            *aluOp = 0xD;
+            *aluOp = 0x00;
             break;
 
         case 0x37: // LUI
@@ -189,7 +203,7 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             *memWr = false;
             *memToReg = false;
             *upperIm = true;
-            *aluOp = 0xE;
+            *aluOp = 0xF;
             break;
 
         case 0x17: //AUIPC
@@ -200,7 +214,7 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             *memWr = false;
             *memToReg = false;
             *upperIm = true;
-            *aluOp = 0x0;
+            *aluOp = 0x00;
             break;
 
         case 0x00: // NULL instruction (program end)
@@ -238,22 +252,28 @@ void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) 
 		if (rd != 0)
 			registers[rd] = result;
 	}
-	// For branches (BEQ)
+	// For branches
 	else if (opcode == 0x63) {
 		alu.execute(rs1_value, rs2_value, aluOp);
-		if (alu.isZero()) {
-
+        // we add the check for aluOp >= 0x33 because we reuse the alu operations 
+        // of BEQ, BGE, and BGEU for BNE, BLT, and BLTU, and then we take the opposite result
+		if (alu.isZero() ^ (aluOp >= 0x33)) {
 			// cout << "Branching forward " << immediate << " bytes" << endl << endl;
 			PC += immediate * 2 - 8;  // Take branch
             // Subtract 8 because the incPC() will add this later
 		}
 	}
 
-    // JAL
-    else if (opcode == 0x6f) {
-        registers[rd] = PC/2 + 4;
-        PC += immediate * 2 - 8;
-        // Subtract 8 because the incPC() will add this later
+    // JAL, JALR
+    else if (opcode == 0x6f || opcode == 0x67) {
+        int32_t result = alu.execute(PC, 4, aluOp);
+        if (rd != 0)
+            registers[rd] = result;
+        if (opcode == 0x67)
+            PC += immediate - 4;
+        else
+            PC = alu.execute(rs1_value, immediate - 4, aluOp);
+        // Subtract 4 from immediate because the incPC() will add this later
     }
 
 	else if (opcode == 0x03) { // Load instructions
@@ -323,6 +343,7 @@ int32_t CPU::generate_immediate(uint32_t instruction, int opcode) {
             break;
             
         case 0x03: // Load instructions (LB, LW)
+        case 0x67: // JALR
             imm = instruction >> 20;
             imm = sign_extend(imm, 12);
             break;
@@ -333,7 +354,7 @@ int32_t CPU::generate_immediate(uint32_t instruction, int opcode) {
             imm = sign_extend(imm, 12);
             break;
             
-        case 0x63: // BEQ
+        case 0x63: // Branch Instructions (BEQ, BGE, BGEU)
             // Immediate is split into multiple parts
             imm = ((instruction >> 19) & 0x1000) | // imm[12]
                   ((instruction << 4) & 0x800) |    // imm[11]

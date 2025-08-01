@@ -41,7 +41,7 @@ int main(int argc, char* argv[])
 			instMem[i] = x; // be careful about hex
 			i++;
 		}
-	int maxPC= i/4; 
+	int maxPC= i/2; 
 	
 
 	CPU myCPU;  
@@ -80,10 +80,10 @@ int main(int argc, char* argv[])
 
 		// execute
 		myCPU.execute(rd, rs1, rs2, aluOp, opcode, curr_instruction);
-		
+
 		// increment PC
 		myCPU.incPC();
-		if (myCPU.readPC() > maxPC * 8) {
+		if (myCPU.readPC() > maxPC) {
 			break;
 		}
 	}
@@ -92,6 +92,7 @@ int main(int argc, char* argv[])
 	
 	// print the results 
 	  myCPU.print_all_registers();
+	  // std::cout << "( " << a0 << ", " << a1 << ")" << std::endl;
 
 	return 0;
 

@@ -6,12 +6,11 @@ ALU::ALU() : zero_flag(false), result(0) {}
 
 int32_t ALU::execute(int32_t operand1, int32_t operand2, int aluOp) {
     switch(aluOp) {
-        case 0x0: // ADD, AUIPC
+        case 0x00: // ADD, AUIPC
         case 0x8: // LB/SB address calculation
         case 0x9: // LW/SW address calculation
         case 0xA: // SB address calculation
         case 0xB: // SW address calculation
-        case 0xD: // JAL (store return address)     For JAL, operand1 is typically PC, operand2 is typically 4
             result = operand1 + operand2;
             break;
             
@@ -32,16 +31,29 @@ int32_t ALU::execute(int32_t operand1, int32_t operand2, int aluOp) {
             result = operand1 | operand2;
             break;
 
-        case 0x7: // AND, ANDI
+        case 0x10: // AND, ANDI
             result = operand1 & operand2;
             break;
             
-        case 0xC: // BEQ comparison
+        case 0x30: // BEQ
+        case 0x35: // BNE
             result = (operand1 == operand2) ? 1 : 0;
             zero_flag = (result == 1);
             break;
+
+        case 0x31: // BGE
+        case 0x33: // BLT
+            result = (operand1 >= operand2) ? 1 : 0;
+            zero_flag = (result == 1);
+            break;
+
+        case 0x32: // BGEU
+        case 0x34: // BLTU
+            result = (static_cast<unsigned int>(operand1) >= static_cast<unsigned int>(operand2)) ? 1 : 0;
+            zero_flag = (result == 1);
+            break;
             
-        case 0xE: // LUI (Load Upper Immediate)
+        case 0xF: // LUI (Load Upper Immediate)
             // For LUI, operand1 contains the immediate value already shifted
             result = operand1;
             break;
