@@ -43,8 +43,8 @@ public:
 
 	void execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst);		// Executes a decoded instruction by performing ALU/memory operations and updating state.
 
-	int32_t read_memory(uint32_t address, bool is_byte);				// Reads a byte or word from memory at the specified address
-    void write_memory(uint32_t address, int32_t value, bool is_byte);	// Writes a byte or word to memory at the specified address.
+	int32_t read_memory(uint32_t address, int type);				// Reads a byte, halfword, or word from memory at the specified address
+    void write_memory(uint32_t address, int32_t value, int type);	// Writes a byte, halfword, or word to memory at the specified address.
 	void print_all_registers();
 	
 };
