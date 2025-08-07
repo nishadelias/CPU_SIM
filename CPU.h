@@ -39,9 +39,9 @@ public:
 	string get_instruction(char *IM);		// Fetches a 32-bit instruction (8 hex characters) from instruction memory
 	int get_register_value(int reg);		// Returns the value stored in the specified register
 	bool decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *branch, bool *memRe, bool *memWr, bool *memToReg, bool *upperIm, int *aluOp,
-		unsigned int *opcode, unsigned int *rd, unsigned int *funct3, unsigned int *rs1, unsigned int *rs2, unsigned int *funct7);
+		unsigned int *opcode, unsigned int *rd, unsigned int *funct3, unsigned int *rs1, unsigned int *rs2, unsigned int *funct7, bool debug=false);
 
-	void execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst);		// Executes a decoded instruction by performing ALU/memory operations and updating state.
+	void execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst, bool debug=false);		// Executes a decoded instruction by performing ALU/memory operations and updating state.
 
 	int32_t read_memory(uint32_t address, int type);				// Reads a byte, halfword, or word from memory at the specified address
     void write_memory(uint32_t address, int32_t value, int type);	// Writes a byte, halfword, or word to memory at the specified address.

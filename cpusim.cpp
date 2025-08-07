@@ -14,6 +14,7 @@ using namespace std;
 
 int main(int argc, char* argv[])
 {
+	bool debug = false;
 
 	char instMem[4096];
 
@@ -72,14 +73,12 @@ int main(int argc, char* argv[])
 		//fetch
 		curr_instruction = myCPU.get_instruction(instMem);
 
-		// cout << curr_instruction << endl;
-
 		// decode
 		done = myCPU.decode_instruction(curr_instruction, &regWrite, &aluSrc, &branch, & memRe, &memWr, &memToReg, &upperIm, &aluOp,
-			&opcode, &rd, &funct3, &rs1, &rs2, &funct7);
+			&opcode, &rd, &funct3, &rs1, &rs2, &funct7, debug);
 
 		// execute
-		myCPU.execute(rd, rs1, rs2, aluOp, opcode, curr_instruction);
+		myCPU.execute(rd, rs1, rs2, aluOp, opcode, curr_instruction, debug);
 
 		// increment PC
 		myCPU.incPC();

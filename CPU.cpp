@@ -50,7 +50,7 @@ int CPU::get_register_value(int reg) {
 
 // decodes an instruction to get control signals and decode the instruction into the necessary parts
 bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *branch, bool *memRe, bool *memWr, bool *memToReg, bool *upperIm, int *aluOp,
-	unsigned int *opcode, unsigned int *rd, unsigned int *funct3, unsigned int *rs1, unsigned int *rs2, unsigned int *funct7) {
+	unsigned int *opcode, unsigned int *rd, unsigned int *funct3, unsigned int *rs1, unsigned int *rs2, unsigned int *funct7, bool debug) {
 	    
     unsigned int instruction = std::stoul(inst, nullptr, 16);
 
@@ -70,15 +70,18 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
     // Load/Store: 0x40 - 0x4F
     // Jump:       0x50 - 0x5F
     
-    // For debugging
-        // std::cout << "Hex Instruction: " << inst << std::endl;
-        // std::cout << "Decoded fields:" << std::endl;
-        // std::cout << "  opcode: 0x" << std::hex << *opcode << std::endl;
-        // std::cout << "  rd: " << std::dec << *rd << std::endl;
-        // std::cout << "  funct3: " << std::dec << *funct3 << std::endl;
-        // std::cout << "  rs1: " << std::dec << *rs1 << std::endl;
-        // std::cout << "  rs2: " << std::dec << *rs2 << std::endl;
-        // std::cout << "  funct7: 0x" << std::hex << *funct7 << std::endl;
+
+    if (debug) {
+        std::cout << "PC: " << std::dec << PC << std::endl;
+        std::cout << "Hex Instruction: " << inst << std::endl;
+        std::cout << "Decoded fields:" << std::endl;
+        std::cout << "  opcode: 0x" << std::hex << *opcode << std::endl;
+        std::cout << "  rd: " << std::dec << *rd << std::endl;
+        std::cout << "  funct3: " << std::dec << *funct3 << std::endl;
+        std::cout << "  rs1: " << std::dec << *rs1 << std::endl;
+        std::cout << "  rs2: " << std::dec << *rs2 << std::endl;
+        std::cout << "  funct7: 0x" << std::hex << *funct7 << std::endl;
+    }
 
     // Default control signals
     *regWrite = false;
@@ -286,7 +289,7 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
 }
 
 // executes instructions by updating register values, loading from memory, and storing in memory
-void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) {
+void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst, bool debug) {
     
 	unsigned int instruction = std::stoul(inst, nullptr, 16);
 
@@ -297,19 +300,26 @@ void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) 
 	// For R-type instructions
 	if (opcode == 0x33) {
 		int32_t result = alu.execute(rs1_value, rs2_value, aluOp);
-		// cout << "R-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
+        if (debug) {
+            cout << "R-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
+        }
 		if (rd != 0)
 			registers[rd] = result;
 	}
 	// For I-type instructions
 	else if (opcode == 0x13) {
 		int32_t result = alu.execute(rs1_value, immediate, aluOp);
-		// cout << "I-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
+        if (debug) {
+            cout << "I-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
+        }
 		if (rd != 0)
 			registers[rd] = result;
 	}
 	// For branches
 	else if (opcode == 0x63) {
+        if (debug) {
+            std::cout << "Branching instruction comparing " << rs1_value << " and " << rs2_value << endl;
+        }
 		alu.execute(rs1_value, rs2_value, aluOp);
         // Branch logic: invert result for BNE, BLT, BLTU
         bool should_branch = false;
@@ -328,10 +338,15 @@ void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) 
         }
         
 		if (should_branch) {
-			// cout << "Branching forward " << immediate << " bytes" << endl << endl;
+            if (debug) {
+                cout << "Branching forward " << immediate << " bytes" << endl << endl;
+            }
 			PC += immediate * 2 - 8;  // Take branch
             // Subtract 8 because the incPC() will add this later
 		}
+        else if (debug) {
+            cout << "Not branching" << endl;
+        }
 	}
 
     // JAL, JALR
@@ -352,24 +367,34 @@ void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) 
         int32_t result = 0;
         if (aluOp == 0x40) { // LB
 			result = read_memory(effective_address, 1); // 1 byte, sign extended
-			// cout << "Loading register " << rd << " with " << result << endl;
+            if (debug) {
+                cout << "Loading register " << rd << " with " << result << endl;
+            }
             registers[rd] = result;
         } else if (aluOp == 0x41) { // LBU
 			result = read_memory(effective_address, 2); // 1 byte, zero extended
-			// cout << "Loading register " << rd << " with " << result << endl;
+            if (debug) {
+                cout << "Loading register " << rd << " with " << result << endl;
+            }
             registers[rd] = result;
         } else if (aluOp == 0x42) { // LH
 			result = read_memory(effective_address, 3); // 2 bytes, sign extended
-			// cout << "Loading register " << rd << " with " << result << endl;
+            if (debug) {
+                cout << "Loading register " << rd << " with " << result << endl;
+            }
             registers[rd] = result;
         } else if (aluOp == 0x43) { // LHU
 			result = read_memory(effective_address, 4); // 2 bytes, zero extended
-			// cout << "Loading register " << rd << " with " << result << endl;
+            if (debug) {
+                cout << "Loading register " << rd << " with " << result << endl;
+            }
             registers[rd] = result;
         } else if (aluOp == 0x44) { // LW
 			result = read_memory(effective_address, 5); // 4 bytes, sign extended
-            // cout << "Effective address: " << effective_address << endl;
-			// cout << "Loading register " << rd << " with " << result << endl;
+            if (debug) {
+                cout << "Effective address: " << effective_address << endl;
+                cout << "Loading register " << rd << " with " << result << endl;
+            }
             registers[rd] = result;
         }
     }
@@ -379,17 +404,20 @@ void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) 
         int32_t effective_address = alu.execute(registers[rs1], immediate, 0x00); // ALU_OP set to 0 for addition
 
         if (aluOp == 0x45) { // SB
-            // cout << "Storing byte of " << registers[rs2] << " to memory address " << effective_address << endl;
             write_memory(effective_address, registers[rs2], 1);
-            // cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
+            if (debug) {
+            cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
+            }
         } else if (aluOp == 0x46) { // SH
-            // cout << "Storing halfword of " << registers[rs2] << " to memory address " << effective_address << endl;
             write_memory(effective_address, registers[rs2], 2);
-            // cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
+            if (debug) {
+            cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
+            }
         } else if (aluOp == 0x47) { // SW
-			// cout << "Storing word of " << registers[rs2] << " to memory address " << effective_address << endl;
             write_memory(effective_address, registers[rs2], 3);
-            // cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
+            if (debug) {
+            cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
+            }
         }
     }
 
@@ -399,7 +427,7 @@ void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) 
                 // For LUI, we just need to pass the immediate value through the ALU
                 // The immediate generation already handled the shifting
 				int32_t result = alu.execute(immediate, 0, aluOp);
-				// cout << "U-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
+				cout << "U-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
                 registers[rd] = result;
             }
 	}
@@ -407,7 +435,7 @@ void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst) 
     // AUIPC
     else if (opcode == 0x17) {
         int32_t result = alu.execute(PC, immediate, aluOp);
-        // cout << "AUIPC instruction" << endl << "Register " << rd << " is being set to " << result << endl;
+        cout << "AUIPC instruction" << endl << "Register " << rd << " is being set to " << result << endl;
         registers[rd] = result;
     }
 

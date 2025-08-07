@@ -124,7 +124,7 @@ int32_t ALU::execute(int32_t operand1, int32_t operand2, int aluOp) {
     }
     
     // Update zero flag (except for branch operations where it's set explicitly)
-    if (aluOp != 0xC) {
+    if (aluOp != 0x30 && aluOp != 0x31 && aluOp != 0x32 && aluOp != 0x33 && aluOp != 0x34 && aluOp != 0x35) {
         zero_flag = (result == 0);
     }
     
