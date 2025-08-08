@@ -108,6 +108,10 @@ private:
 	ID_EX_Register id_ex;
 	EX_MEM_Register ex_mem;
 	MEM_WB_Register mem_wb;
+
+    // Previous-cycle snapshots for safe forwarding (read-only in EX)
+    EX_MEM_Register ex_mem_prev;
+    MEM_WB_Register mem_wb_prev;
 	
 	// Pipeline control
 	bool pipeline_stall;

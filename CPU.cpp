@@ -85,6 +85,7 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
     
 
     if (debug) {
+        auto oldflags = std::cout.flags(); // save format flags
         std::cout << "PC: " << std::dec << PC << std::endl;
         std::cout << "Hex Instruction: " << inst << std::endl;
         std::cout << "Decoded fields:" << std::endl;
@@ -94,7 +95,9 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
         std::cout << "  rs1: " << std::dec << *rs1 << std::endl;
         std::cout << "  rs2: " << std::dec << *rs2 << std::endl;
         std::cout << "  funct7: 0x" << std::hex << *funct7 << std::endl;
+        std::cout.flags(oldflags); // restore original format flags
     }
+    
 
     // Default control signals
     *regWrite = false;
@@ -317,160 +320,6 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             break;
 	}
 	return true;
-
-}
-
-// executes instructions by updating register values, loading from memory, and storing in memory
-void CPU::execute(int rd, int rs1, int rs2, int aluOp, int opcode, string inst, bool debug) {
-    
-	unsigned int instruction = std::stoul(inst, nullptr, 16);
-
-	int32_t rs1_value = registers[rs1];  
-	int32_t rs2_value = registers[rs2];
-	int32_t immediate = generate_immediate(instruction, opcode);  
-
-	// For R-type instructions
-	if (opcode == 0x33) {
-		int32_t result = alu.execute(rs1_value, rs2_value, aluOp);
-        if (debug) {
-            cout << "R-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
-        }
-		if (rd != 0)
-			registers[rd] = result;
-	}
-	// For I-type instructions
-	else if (opcode == 0x13) {
-		int32_t result = alu.execute(rs1_value, immediate, aluOp);
-        if (debug) {
-            cout << "I-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
-        }
-		if (rd != 0)
-			registers[rd] = result;
-	}
-	// For branches
-	else if (opcode == 0x63) {
-        if (debug) {
-            std::cout << "Branching instruction comparing " << rs1_value << " and " << rs2_value << endl;
-        }
-		alu.execute(rs1_value, rs2_value, aluOp);
-        // Branch logic: invert result for BNE, BLT, BLTU
-        bool should_branch = false;
-        if (aluOp == 0x30) { // BEQ
-            should_branch = alu.isZero();
-        } else if (aluOp == 0x35) { // BNE
-            should_branch = !alu.isZero();
-        } else if (aluOp == 0x31) { // BGE
-            should_branch = alu.isZero();
-        } else if (aluOp == 0x33) { // BLT
-            should_branch = !alu.isZero();
-        } else if (aluOp == 0x32) { // BGEU
-            should_branch = alu.isZero();
-        } else if (aluOp == 0x34) { // BLTU
-            should_branch = !alu.isZero();
-        }
-        
-		if (should_branch) {
-            if (debug) {
-                cout << "Branching forward " << immediate << " bytes" << endl << endl;
-            }
-			PC += immediate * 2 - 8;  // Take branch
-            // Subtract 8 because the incPC() will add this later
-		}
-        else if (debug) {
-            cout << "Not branching" << endl;
-        }
-	}
-
-    // JAL, JALR
-    else if (opcode == 0x6f || opcode == 0x67) {
-        int32_t result = alu.execute(PC, 4, aluOp);
-        if (rd != 0)
-            registers[rd] = result;
-        if (opcode == 0x67)  // JALR
-            PC = alu.execute(rs1_value, immediate, aluOp) - 4;
-        else                 // JAL
-            PC += immediate - 4;
-        // Subtract 4 from immediate because the incPC() will add this later
-    }
-
-	else if (opcode == 0x03) { // Load instructions
-        // Use ALU to calculate effective address (base + offset)
-        int32_t effective_address = alu.execute(registers[rs1], immediate, 0x00); // ALU_OP set to 0 for addition
-        int32_t result = 0;
-        if (aluOp == 0x40) { // LB
-			result = read_memory(effective_address, 1); // 1 byte, sign extended
-            if (debug) {
-                cout << "Loading register " << rd << " with " << result << endl;
-            }
-            registers[rd] = result;
-        } else if (aluOp == 0x41) { // LBU
-			result = read_memory(effective_address, 2); // 1 byte, zero extended
-            if (debug) {
-                cout << "Loading register " << rd << " with " << result << endl;
-            }
-            registers[rd] = result;
-        } else if (aluOp == 0x42) { // LH
-			result = read_memory(effective_address, 3); // 2 bytes, sign extended
-            if (debug) {
-                cout << "Loading register " << rd << " with " << result << endl;
-            }
-            registers[rd] = result;
-        } else if (aluOp == 0x43) { // LHU
-			result = read_memory(effective_address, 4); // 2 bytes, zero extended
-            if (debug) {
-                cout << "Loading register " << rd << " with " << result << endl;
-            }
-            registers[rd] = result;
-        } else if (aluOp == 0x44) { // LW
-			result = read_memory(effective_address, 5); // 4 bytes, sign extended
-            if (debug) {
-                cout << "Effective address: " << effective_address << endl;
-                cout << "Loading register " << rd << " with " << result << endl;
-            }
-            registers[rd] = result;
-        }
-    }
-
-    else if (opcode == 0x23) { // Store instructions
-        // Use ALU to calculate effective address (base + offset)
-        int32_t effective_address = alu.execute(registers[rs1], immediate, 0x00); // ALU_OP set to 0 for addition
-
-        if (aluOp == 0x45) { // SB
-            write_memory(effective_address, registers[rs2], 1);
-            if (debug) {
-            cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
-            }
-        } else if (aluOp == 0x46) { // SH
-            write_memory(effective_address, registers[rs2], 2);
-            if (debug) {
-            cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
-            }
-        } else if (aluOp == 0x47) { // SW
-            write_memory(effective_address, registers[rs2], 3);
-            if (debug) {
-            cout << "Stored the value " << dmemory[effective_address] << " in memory location " << effective_address << endl;
-            }
-        }
-    }
-
-    // LUI
-	else if (opcode == 0x37) {
-		if (rd != 0) { // Don't write to x0
-                // For LUI, we just need to pass the immediate value through the ALU
-                // The immediate generation already handled the shifting
-				int32_t result = alu.execute(immediate, 0, aluOp);
-				cout << "U-type instruction" << endl << "Register " << rd << " is being set to " << result << endl;
-                registers[rd] = result;
-            }
-	}
-
-    // AUIPC
-    else if (opcode == 0x17) {
-        int32_t result = alu.execute(PC, immediate, aluOp);
-        cout << "AUIPC instruction" << endl << "Register " << rd << " is being set to " << result << endl;
-        registers[rd] = result;
-    }
-
 }
 
 // generates immediate for the given instruction
@@ -480,8 +329,13 @@ int32_t CPU::generate_immediate(uint32_t instruction, int opcode) {
     switch(opcode) {
         case 0x13: // I-type (ADDI, SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI)
             imm = instruction >> 20;
-            // For shift instructions (SLLI, SRLI, SRAI), only use bottom 5 bits
-            if (((instruction >> 12) & 0x7) == 0x1 || ((instruction >> 12) & 0x7) == 0x5) {
+            if (((instruction >> 12) & 0x7) == 0x1) { // SLLI
+                imm = imm & 0x1F;
+            } else if (((instruction >> 12) & 0x7) == 0x5) {
+                // Keep full 12 bits for funct7 detection
+                // Lower 5 bits are shamt
+                // Upper 7 bits are funct7 (used only in decode)
+                // For ALU execution, we still want the shamt
                 imm = imm & 0x1F;
             } else {
                 imm = sign_extend(imm, 12);
@@ -622,6 +476,7 @@ void CPU::write_memory(uint32_t address, int32_t value, int type) {
 
 
 void CPU::print_all_registers() {
+    std::cout << std::dec; // force decimal
     std::cout << "Register Values:" << std::endl;
     for (int i = 0; i < 32; i++) {
         std::cout << REGISTER_NAMES[i] << ": " << registers[i] << std::endl;
@@ -637,8 +492,16 @@ void CPU::instruction_fetch(char* instMem, bool debug) {
         }
         return;
     }
-    
-    // Check if we've reached the end of instruction memory
+
+    if (pipeline_flush) {
+        if_id.valid = false;
+        pipeline_flush = false;
+        if (debug) {
+            std::cout << "IF: Flushed due to branch" << std::endl;
+        }
+        return;
+    }
+
     if (PC >= maxPC) {
         if_id.valid = false;
         if (debug) {
@@ -646,8 +509,7 @@ void CPU::instruction_fetch(char* instMem, bool debug) {
         }
         return;
     }
-    
-    // Fetch instruction
+
     string inst_str = get_instruction(instMem);
     if (inst_str == "00000000") {
         if_id.valid = false;
@@ -656,23 +518,31 @@ void CPU::instruction_fetch(char* instMem, bool debug) {
         }
         return;
     }
-    
-    // Convert hex string to uint32_t
+
     if_id.instruction = std::stoul(inst_str, nullptr, 16);
     if_id.pc = PC;
     if_id.valid = true;
-    
+
     if (debug) {
         std::cout << "IF: Fetched instruction 0x" << std::hex << if_id.instruction 
                   << " at PC 0x" << if_id.pc << std::dec << std::endl;
         std::cout << "IF: Raw instruction string: " << inst_str << std::endl;
     }
-    
-    // Increment PC for next instruction
+
     incPC();
 }
 
+
 void CPU::instruction_decode(bool debug) {
+    if (pipeline_flush) {
+        id_ex.valid = false;
+        pipeline_flush = false;
+        if (debug) {
+            std::cout << "ID: Flushed due to branch" << std::endl;
+        }
+        return;
+    }
+
     if (!if_id.valid) {
         id_ex.valid = false;
         if (debug) {
@@ -680,19 +550,31 @@ void CPU::instruction_decode(bool debug) {
         }
         return;
     }
-    
+
     // Decode the instruction
     bool regWrite, aluSrc, branch, memRe, memWr, memToReg, upperIm;
     int aluOp;
     unsigned int opcode, rd, funct3, rs1, rs2, funct7;
-    
+
     // Convert instruction to hex string for decode_instruction
     char inst_str[9];
     snprintf(inst_str, sizeof(inst_str), "%08x", if_id.instruction);
     bool valid = decode_instruction(string(inst_str), &regWrite, &aluSrc, &branch, &memRe, 
                                    &memWr, &memToReg, &upperIm, &aluOp,
                                    &opcode, &rd, &funct3, &rs1, &rs2, &funct7, debug);
-    
+
+    // Load-use hazard detection
+    if (id_ex.memRe && (
+        (id_ex.rd != 0 && id_ex.rd == rs1) || 
+        (id_ex.rd != 0 && id_ex.rd == rs2))) {
+
+        pipeline_stall = true;
+        if (debug) {
+            std::cout << "ID: Load-use hazard detected. Stalling pipeline." << std::endl;
+        }
+        return;
+    }
+
     if (!valid) {
         id_ex.valid = false;
         if (debug) {
@@ -700,14 +582,14 @@ void CPU::instruction_decode(bool debug) {
         }
         return;
     }
-    
+
     // Read register values
     int32_t rs1_data = (rs1 != 0) ? get_register_value(rs1) : 0;
     int32_t rs2_data = (rs2 != 0) ? get_register_value(rs2) : 0;
-    
+
     // Generate immediate value
     int32_t immediate = generate_immediate(if_id.instruction, opcode);
-    
+
     // Update ID/EX register
     id_ex.regWrite = regWrite;
     id_ex.aluSrc = aluSrc;
@@ -728,13 +610,14 @@ void CPU::instruction_decode(bool debug) {
     id_ex.immediate = immediate;
     id_ex.pc = if_id.pc;
     id_ex.valid = true;
-    
+
     if (debug) {
         std::cout << "ID: Decoded instruction - " << disassemble_instruction(if_id.instruction) << std::endl;
         std::cout << "    rs1_data: " << rs1_data << ", rs2_data: " << rs2_data << ", immediate: " << immediate << std::endl;
         std::cout << "    Valid: " << (valid ? "true" : "false") << std::endl;
     }
 }
+
 
 void CPU::execute_stage(bool debug) {
     if (!id_ex.valid) {
@@ -744,16 +627,64 @@ void CPU::execute_stage(bool debug) {
         }
         return;
     }
-    
-    int32_t operand1 = id_ex.rs1_data;
-    int32_t operand2 = id_ex.aluSrc ? id_ex.immediate : id_ex.rs2_data;
-    
+
+    // Forward from previous-cycle EX/MEM for operand1 (rs1)
+    int32_t operand1;
+    if (ex_mem_prev.regWrite && ex_mem_prev.rd != 0 && ex_mem_prev.rd == id_ex.rs1) {
+        operand1 = ex_mem_prev.alu_result;
+    }
+    else if (mem_wb_prev.regWrite && mem_wb_prev.rd != 0 && mem_wb_prev.rd == id_ex.rs1) {
+        operand1 = mem_wb_prev.memToReg ? mem_wb_prev.mem_data : mem_wb_prev.alu_result;
+    } else {
+        operand1 = id_ex.rs1_data;
+    }
+
+    // Forward from previous-cycle EX/MEM for operand2 (rs2) unless using immediate
+    int32_t operand2;
+    if (id_ex.aluSrc) {
+        operand2 = id_ex.immediate;  // e.g., SRAI
+    }
+    else if (ex_mem_prev.regWrite && ex_mem_prev.rd != 0 && ex_mem_prev.rd == id_ex.rs2) {
+        operand2 = ex_mem_prev.alu_result;
+    }
+    else if (mem_wb_prev.regWrite && mem_wb_prev.rd != 0 && mem_wb_prev.rd == id_ex.rs2) {
+        operand2 = mem_wb_prev.memToReg ? mem_wb_prev.mem_data : mem_wb_prev.alu_result;
+    } else {
+        operand2 = id_ex.rs2_data;
+    }
+
+
+    // LUI operand setup
+    if (id_ex.opcode == 0x37 && id_ex.upperIm) {
+        operand1 = id_ex.immediate;
+        operand2 = 0;
+    }
+
     // Call ALU
     int32_t alu_result = alu.execute(operand1, operand2, id_ex.aluOp);
 
-    // TODO: Branch logic and PC update should eventually go here
-    // Right now, control hazards are not handled.
-    
+    // Branch decision
+    if (id_ex.branch) {
+        bool should_branch = false;
+        switch (id_ex.aluOp) {
+            case 0x30: should_branch = alu.isZero(); break; // BEQ
+            case 0x35: should_branch = !alu.isZero(); break; // BNE
+            case 0x31: should_branch = alu.isZero(); break;  // BGE
+            case 0x33: should_branch = !alu.isZero(); break; // BLT
+            case 0x32: should_branch = alu.isZero(); break;  // BGEU
+            case 0x34: should_branch = !alu.isZero(); break; // BLTU
+        }
+
+        if (should_branch) {
+            PC = id_ex.pc + (id_ex.immediate * 2);
+            pipeline_flush = true;
+
+            if (debug) {
+                std::cout << "EX: Branch taken. Flushing pipeline." << std::endl;
+            }
+        }
+    }
+
     // Update EX/MEM register
     ex_mem.regWrite = id_ex.regWrite;
     ex_mem.memRe = id_ex.memRe;
@@ -764,22 +695,18 @@ void CPU::execute_stage(bool debug) {
     ex_mem.rd = id_ex.rd;
     ex_mem.pc = id_ex.pc;
     ex_mem.valid = true;
-    
+
     if (debug) {
         std::cout << "EX: ALU operation - " << operand1 << " op " << operand2 << " = " << alu_result << std::endl;
 
-        // Log branch instruction
         if (id_ex.branch) {
             std::cout << "EX: Branch instruction ";
-            if (alu.isZero()) {
-                std::cout << "taken";
-            } else {
-                std::cout << "not taken";
-            }
+            std::cout << (alu.isZero() ? "taken" : "not taken");
             std::cout << " (Zero flag = " << alu.isZero() << ")" << std::endl;
         }
     }
 }
+
 
 void CPU::memory_stage(bool debug) {
     if (!ex_mem.valid) {
@@ -830,6 +757,7 @@ void CPU::write_back_stage(bool debug) {
         registers[mem_wb.rd] = write_data;
         
         if (debug) {
+            std::cout << std::dec;
             std::cout << "WB: Write " << write_data << " to register " << REGISTER_NAMES[mem_wb.rd] << std::endl;
         }
     }
@@ -839,21 +767,25 @@ void CPU::run_pipeline_cycle(char* instMem, int cycle, bool debug) {
     if (debug) {
         std::cout << "\n=== Cycle " << cycle << " ===" << std::endl;
     }
-    
-    // Execute pipeline stages in reverse order (WB -> MEM -> EX -> ID -> IF)
-    // This ensures data flows correctly through the pipeline
-    
+
+    // Take snapshots so EX can see last cycle's values
+    ex_mem_prev = ex_mem;
+    mem_wb_prev = mem_wb;
+
     write_back_stage(debug);
     memory_stage(debug);
     execute_stage(debug);
     instruction_decode(debug);
     instruction_fetch(instMem, debug);
-    
-    // Log pipeline state if enabled
+
     if (enable_logging) {
         log_pipeline_state(cycle);
     }
+
+    pipeline_stall = false;
 }
+
+
 
 void CPU::set_logging(bool enable, string log_filename) {
     enable_logging = enable;
@@ -943,6 +875,13 @@ string CPU::disassemble_instruction(uint32_t instruction) {
             }
             args = REGISTER_NAMES[rs1] + ", " + REGISTER_NAMES[rs2] + ", " + std::to_string(generate_immediate(instruction, opcode));
             break;
+        case 0x37: // LUI
+            op = "LUI";
+            args = REGISTER_NAMES[rd] + ", " + std::to_string(generate_immediate(instruction, opcode));
+            break;
+        case 0x17: // AUIPC
+            op = "AUIPC";
+            args = REGISTER_NAMES[rd] + ", " + std::to_string(generate_immediate(instruction, opcode));
     }
     
     return op + " " + args;

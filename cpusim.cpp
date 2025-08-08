@@ -70,6 +70,7 @@ int main(int argc, char* argv[])
 	}
 	
 	if (debug) {
+		cout << std::dec;
 		cout << "Starting pipeline simulation..." << endl;
 		cout << "Max PC: " << maxPC << endl;
 		cout << "Instruction memory size: " << i << " bytes" << endl;
@@ -114,6 +115,7 @@ int main(int argc, char* argv[])
 	int a1 = myCPU.get_register_value(11);  //a1
 	
 	// print the results 
+	cout << std::dec;
 	cout << "\n=== Final Results ===" << endl;
 	cout << "Total cycles: " << cycle << endl;
 	myCPU.print_all_registers();
