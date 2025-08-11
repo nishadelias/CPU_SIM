@@ -1,2 +1,5 @@
 .vscode/
+.DS_Store
 cpusim
+pipeline.log
+PIPELINE_README.md
