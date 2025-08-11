@@ -7,6 +7,7 @@
 #include <string>
 #include <fstream>
 #include "ALU.h"
+#include <cstdint>
 using namespace std;
 
 // Pipeline register structures
@@ -28,6 +29,11 @@ struct ID_EX_Register {
     bool memToReg;
     bool upperIm;
     int aluOp;
+    // memory width/type (so MEM can do LB/LH/LW & SB/SH/SW correctly)
+    // Loads: 1=LB, 2=LBU, 3=LH, 4=LHU, 5=LW
+    // Stores: 1=SB, 2=SH, 3=SW
+    int memReadType;
+    int memWriteType;
     
     // Instruction fields
     unsigned int opcode;
@@ -46,6 +52,7 @@ struct ID_EX_Register {
     
     ID_EX_Register() : regWrite(false), aluSrc(false), branch(false), memRe(false), 
                       memWr(false), memToReg(false), upperIm(false), aluOp(0),
+                      memReadType(0), memWriteType(0),
                       opcode(0), rd(0), funct3(0), rs1(0), rs2(0), funct7(0),
                       rs1_data(0), rs2_data(0), immediate(0), pc(0), valid(false) {}
 };
@@ -56,6 +63,8 @@ struct EX_MEM_Register {
     bool memRe;
     bool memWr;
     bool memToReg;
+    int memReadType;
+    int memWriteType;
     
     // Data
     int32_t alu_result;
@@ -65,6 +74,7 @@ struct EX_MEM_Register {
     bool valid;
     
     EX_MEM_Register() : regWrite(false), memRe(false), memWr(false), memToReg(false),
+                       memReadType(0), memWriteType(0),
                        alu_result(0), rs2_data(0), rd(0), pc(0), valid(false) {}
 };
 
@@ -94,7 +104,7 @@ struct MEM_WB_Register {
 class CPU {
 private:
 	static const int MEMORY_SIZE = 4096;
-    int dmemory[MEMORY_SIZE]; 	//data memory byte addressable in little endian fashion;
+    uint8_t dmemory[MEMORY_SIZE]; 	// data memory: byte-addressable, little-endian
 	unsigned long PC; //pc 
 	int32_t registers[32];
 	const string REGISTER_NAMES[32] = {"Zero","ra","sp","gp","tp","t0","t1","t2",

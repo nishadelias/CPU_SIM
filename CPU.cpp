@@ -8,10 +8,7 @@
 CPU::CPU()
 {
 	PC = 0; //set PC to 0
-	for (int i = 0; i < 4096; i++) //copy instrMEM
-	{
-		dmemory[i] = (0);
-	}
+	for (int i = 0; i < 4096; i++) { dmemory[i] = 0; }
 
 	for (int i = 0; i < 32; i++) {
 		registers[i] = 0;
@@ -108,6 +105,9 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
     *memToReg = false;
     *upperIm = false;
     *aluOp = 0;
+    // We'll stash load/store widths in ID/EX after this call (set defaults here)
+    id_ex.memReadType = 0;
+    id_ex.memWriteType = 0;
 
     // Decode based on opcode
     switch (*opcode) {
@@ -209,18 +209,23 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             
             if (*funct3 == 0x0) { // LB
                 *aluOp = 0x40;
+                id_ex.memReadType = 1;
             }
             else if (*funct3 == 0x4) { // LBU
                 *aluOp = 0x41;
+                id_ex.memReadType = 2;
             }
             else if (*funct3 == 0x1) { // LH
                 *aluOp = 0x42;
+                id_ex.memReadType = 3;
             }
             else if (*funct3 == 0x5) { // LHU
                 *aluOp = 0x43;
+                id_ex.memReadType = 4;
             }
             else if (*funct3 == 0x2) { // LW
                 *aluOp = 0x44;
+                id_ex.memReadType = 5;
             }
             break;
 
@@ -234,12 +239,15 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             *upperIm = false;
             if (*funct3 == 0x0) { // SB
                 *aluOp = 0x45;
+                id_ex.memWriteType = 1;
             }
             else if (*funct3 == 0x1) { // SH
                 *aluOp = 0x46;
+                id_ex.memWriteType = 2;
             }
             else if (*funct3 == 0x2) { // SW
                 *aluOp = 0x47;
+                id_ex.memWriteType = 3;
             }
             break;
 
@@ -361,6 +369,7 @@ int32_t CPU::generate_immediate(uint32_t instruction, int opcode) {
                   ((instruction >> 20) & 0x7E0) |   // imm[10:5]
                   ((instruction >> 7) & 0x1E);      // imm[4:1]
             imm = sign_extend(imm, 13);
+            imm <<= 1; // B-type encodes bit0=0; produce byte offset here
             break;
             
         case 0x6F: // JAL
@@ -370,6 +379,7 @@ int32_t CPU::generate_immediate(uint32_t instruction, int opcode) {
                   ((instruction >> 9) & 0x800) |      // imm[11]
                   ((instruction >> 20) & 0x7FE);      // imm[10:1]
             imm = sign_extend(imm, 21);
+            imm <<= 1; // UJ-type encodes bit0=0; produce byte offset here
             break;
             
         case 0x37: // LUI
@@ -423,27 +433,27 @@ int32_t CPU::read_memory(uint32_t address, int type) {
     }
     
     if (type == 1) { // LB - Load byte (sign extended)
-        int8_t byte_val = dmemory[address];
+        int8_t byte_val = static_cast<int8_t>(dmemory[address]);
         return static_cast<int32_t>(byte_val);
     } else if (type == 2) { // LBU - Load byte unsigned (zero extended)
-        uint8_t byte_val = dmemory[address];
+        uint8_t byte_val = static_cast<uint8_t>(dmemory[address]);
         return static_cast<int32_t>(byte_val);
     } else if (type == 3) { // LH - Load halfword (sign extended)
         int16_t halfword = 0;
         for (int i = 0; i < 2; i++) {
-            halfword |= (dmemory[address + i] & 0xFF) << (i * 8);
+            halfword |= static_cast<uint16_t>(dmemory[address + i]) << (i * 8);
         }
         return static_cast<int32_t>(halfword);
     } else if (type == 4) { // LHU - Load halfword unsigned (zero extended)
         uint16_t halfword = 0;
         for (int i = 0; i < 2; i++) {
-            halfword |= (dmemory[address + i] & 0xFF) << (i * 8);
+            halfword |= static_cast<uint16_t>(dmemory[address + i]) << (i * 8);
         }
         return static_cast<int32_t>(halfword);
     } else if (type == 5) { // LW - Load word
         int32_t word = 0;
         for (int i = 0; i < 4; i++) {
-            word |= (dmemory[address + i] & 0xFF) << (i * 8);
+            word |= static_cast<int32_t>(dmemory[address + i]) << (i * 8);
         }
         return word;
     }
@@ -462,14 +472,14 @@ void CPU::write_memory(uint32_t address, int32_t value, int type) {
     }
     
     if (type == 1) { // SB - Store byte
-        dmemory[address] = value & 0xFF;
+        dmemory[address] = static_cast<uint8_t>(value & 0xFF);
     } else if (type == 2) { // SH - Store halfword
         for (int i = 0; i < 2; i++) {
-            dmemory[address + i] = (value >> (i * 8)) & 0xFF;
+            dmemory[address + i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
         }
     } else if (type == 3) { // SW - Store word
         for (int i = 0; i < 4; i++) {
-            dmemory[address + i] = (value >> (i * 8)) & 0xFF;
+            dmemory[address + i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
         }
     }
 }
@@ -663,6 +673,48 @@ void CPU::execute_stage(bool debug) {
     // Call ALU
     int32_t alu_result = alu.execute(operand1, operand2, id_ex.aluOp);
 
+    // --- Jumps (handle control transfer + link) ---
+    if (id_ex.opcode == 0x6F) { // JAL
+        // rd := PC+4, PC := PC + imm (imm already byte-scaled)
+        ex_mem.regWrite   = true;
+        ex_mem.memRe      = false;
+        ex_mem.memWr      = false;
+        ex_mem.memToReg   = false;
+        ex_mem.memReadType  = 0;
+        ex_mem.memWriteType = 0;
+        ex_mem.alu_result = static_cast<int32_t>(id_ex.pc + 4);
+        ex_mem.rs2_data   = 0;
+        ex_mem.rd         = id_ex.rd;
+        ex_mem.pc         = id_ex.pc;
+        ex_mem.valid      = true;
+
+        PC = id_ex.pc + id_ex.immediate;
+        pipeline_flush = true;
+        if (debug) { std::cout << "EX: JAL taken to " << PC << ", link=" << (id_ex.pc+4) << std::endl; }
+        return;
+    }
+    if (id_ex.opcode == 0x67) { // JALR
+        // rd := PC+4, PC := (rs1 + imm) & ~1
+        int32_t target = (operand1 + id_ex.immediate) & ~1;
+
+        ex_mem.regWrite   = true;
+        ex_mem.memRe      = false;
+        ex_mem.memWr      = false;
+        ex_mem.memToReg   = false;
+        ex_mem.memReadType  = 0;
+        ex_mem.memWriteType = 0;
+        ex_mem.alu_result = static_cast<int32_t>(id_ex.pc + 4);
+        ex_mem.rs2_data   = 0;
+        ex_mem.rd         = id_ex.rd;
+        ex_mem.pc         = id_ex.pc;
+        ex_mem.valid      = true;
+
+        PC = static_cast<uint32_t>(target);
+        pipeline_flush = true;
+        if (debug) { std::cout << "EX: JALR taken to " << PC << ", link=" << (id_ex.pc+4) << std::endl; }
+        return;
+    }
+
     // Branch decision
     if (id_ex.branch) {
         bool should_branch = false;
@@ -676,7 +728,8 @@ void CPU::execute_stage(bool debug) {
         }
 
         if (should_branch) {
-            PC = id_ex.pc + (id_ex.immediate * 2);
+            // immediate already byte-scaled in generate_immediate()
+            PC = id_ex.pc + id_ex.immediate;
             pipeline_flush = true;
 
             if (debug) {
@@ -690,6 +743,8 @@ void CPU::execute_stage(bool debug) {
     ex_mem.memRe = id_ex.memRe;
     ex_mem.memWr = id_ex.memWr;
     ex_mem.memToReg = id_ex.memToReg;
+    ex_mem.memReadType  = id_ex.memReadType;
+    ex_mem.memWriteType = id_ex.memWriteType;
     ex_mem.alu_result = alu_result;
     ex_mem.rs2_data = id_ex.rs2_data;
     ex_mem.rd = id_ex.rd;
@@ -722,13 +777,13 @@ void CPU::memory_stage(bool debug) {
     // Memory operations
     if (ex_mem.memRe) {
         // Load operation
-        mem_data = read_memory(ex_mem.alu_result, 5); // Assume LW for now
+        mem_data = read_memory(ex_mem.alu_result, ex_mem.memReadType);
         if (debug) {
             std::cout << "MEM: Load from address " << ex_mem.alu_result << " = " << mem_data << std::endl;
         }
     } else if (ex_mem.memWr) {
         // Store operation
-        write_memory(ex_mem.alu_result, ex_mem.rs2_data, 3); // Assume SW for now
+        write_memory(ex_mem.alu_result, ex_mem.rs2_data, ex_mem.memWriteType);
         if (debug) {
             std::cout << "MEM: Store " << ex_mem.rs2_data << " to address " << ex_mem.alu_result << std::endl;
         }
