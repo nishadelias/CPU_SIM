@@ -5,10 +5,11 @@
 #include <iostream>
 #include <bitset>
 #include <stdio.h>
-#include<stdlib.h>
+#include <stdlib.h>
 #include <string>
-#include<fstream>
+#include< fstream>
 #include <sstream>
+#include <thread>
 using namespace std;
 
 
