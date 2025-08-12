@@ -4,21 +4,24 @@
 #include <iomanip>
 #include <iostream>
 
+#define MEMORY_SIZE 4096
 
 CPU::CPU()
 {
-	PC = 0; //set PC to 0
-	for (int i = 0; i < 4096; i++) { dmemory[i] = 0; }
+    PC = 0; //set PC to 0
 
-	for (int i = 0; i < 32; i++) {
-		registers[i] = 0;
-	}
-	
-	// Initialize pipeline control
-	pipeline_stall = false;
-	pipeline_flush = false;
-	maxPC = 0;
-	enable_logging = false;
+    for (int i = 0; i < 32; i++) {
+        registers[i] = 0;
+    }
+
+    // Initialize pipeline control
+    pipeline_stall = false;
+    pipeline_flush = false;
+    maxPC = 0;
+    enable_logging = false;
+    dmem_ = NULL;
+
+    // dmem_ will be set by main(); we keep nullptr check in load/store
 }
 
 CPU::~CPU()
@@ -421,67 +424,61 @@ bool CPU::check_address_alignment(uint32_t address, uint32_t bytes) {
     return true;
 }
 
-// Memory read operation
+// Memory read operation (now via dmem_)
 int32_t CPU::read_memory(uint32_t address, int type) {
-    // type: 1=LB (byte, sign extended), 2=LBU (byte, zero extended), 
+    // type: 1=LB (byte, sign extended), 2=LBU (byte, zero extended),
     //       3=LH (halfword, sign extended), 4=LHU (halfword, zero extended), 5=LW (word)
-    
-    uint32_t bytes = (type == 1 || type == 2) ? 1 : (type == 3 || type == 4) ? 2 : 4;
-    
-    if (!check_address_alignment(address, bytes)) {
-        return 0;
+
+    if (!dmem_) { std::cerr << "ERROR: data memory not set\n"; return 0; }
+
+    AccessSize sz = AccessSize::Byte;
+    switch (type) {
+        case 1: case 2: sz = AccessSize::Byte; break;
+        case 3: case 4: sz = AccessSize::Half; break;
+        case 5:         sz = AccessSize::Word; break;
+        default: return 0;
     }
-    
-    if (type == 1) { // LB - Load byte (sign extended)
-        int8_t byte_val = static_cast<int8_t>(dmemory[address]);
-        return static_cast<int32_t>(byte_val);
-    } else if (type == 2) { // LBU - Load byte unsigned (zero extended)
-        uint8_t byte_val = static_cast<uint8_t>(dmemory[address]);
-        return static_cast<int32_t>(byte_val);
-    } else if (type == 3) { // LH - Load halfword (sign extended)
-        int16_t halfword = 0;
-        for (int i = 0; i < 2; i++) {
-            halfword |= static_cast<uint16_t>(dmemory[address + i]) << (i * 8);
-        }
-        return static_cast<int32_t>(halfword);
-    } else if (type == 4) { // LHU - Load halfword unsigned (zero extended)
-        uint16_t halfword = 0;
-        for (int i = 0; i < 2; i++) {
-            halfword |= static_cast<uint16_t>(dmemory[address + i]) << (i * 8);
-        }
-        return static_cast<int32_t>(halfword);
-    } else if (type == 5) { // LW - Load word
-        int32_t word = 0;
-        for (int i = 0; i < 4; i++) {
-            word |= static_cast<int32_t>(dmemory[address + i]) << (i * 8);
-        }
-        return word;
+
+    uint32_t bytes = static_cast<uint32_t>(sz);
+    if (!check_address_alignment(address, bytes)) return 0;
+
+    MemResp r = dmem_->load(address, sz);
+    if (!r.ok) { std::cerr << "Memory read OOB @ " << address << "\n"; return 0; }
+
+    if (type == 1) { // LB sign-extend
+        int8_t b = (int8_t)(r.data & 0xFF);
+        return (int32_t)b;
+    } else if (type == 2) { // LBU zero-extend
+        uint8_t b = (uint8_t)(r.data & 0xFF);
+        return (int32_t)b;
+    } else if (type == 3) { // LH sign-extend
+        int16_t h = (int16_t)(r.data & 0xFFFF);
+        return (int32_t)h;
+    } else if (type == 4) { // LHU zero-extend
+        uint16_t h = (uint16_t)(r.data & 0xFFFF);
+        return (int32_t)h;
+    } else { // LW
+        return (int32_t)r.data;
     }
-    
-    return 0; // Invalid type
 }
 
-// Memory write operation
+// Memory write operation (now via dmem_)
 void CPU::write_memory(uint32_t address, int32_t value, int type) {
-    // type: 1=SB (byte), 2=SH (halfword), 3=SW (word)
-    
-    uint32_t bytes = (type == 1) ? 1 : (type == 2) ? 2 : 4;
-    
-    if (!check_address_alignment(address, bytes)) {
-        return;
+    if (!dmem_) { std::cerr << "ERROR: data memory not set\n"; return; }
+
+    AccessSize sz = AccessSize::Byte;
+    switch (type) {
+        case 1: sz = AccessSize::Byte; break;  // SB
+        case 2: sz = AccessSize::Half; break;  // SH
+        case 3: sz = AccessSize::Word; break;  // SW
+        default: return;
     }
-    
-    if (type == 1) { // SB - Store byte
-        dmemory[address] = static_cast<uint8_t>(value & 0xFF);
-    } else if (type == 2) { // SH - Store halfword
-        for (int i = 0; i < 2; i++) {
-            dmemory[address + i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
-        }
-    } else if (type == 3) { // SW - Store word
-        for (int i = 0; i < 4; i++) {
-            dmemory[address + i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
-        }
-    }
+
+    uint32_t bytes = static_cast<uint32_t>(sz);
+    if (!check_address_alignment(address, bytes)) return;
+
+    bool ok = dmem_->store(address, (uint32_t)value, sz);
+    if (!ok) { std::cerr << "Memory write OOB @ " << address << "\n"; }
 }
 
 
@@ -497,38 +494,27 @@ void CPU::print_all_registers() {
 
 void CPU::instruction_fetch(char* instMem, bool debug) {
     if (pipeline_stall) {
-        if (debug) {
-            std::cout << "IF: Pipeline stalled, no instruction fetched" << std::endl;
-        }
+        if (debug) { std::cout << "IF: Pipeline stalled, no instruction fetched" << std::endl; }
         return;
     }
-
     if (pipeline_flush) {
         if_id.valid = false;
         pipeline_flush = false;
-        if (debug) {
-            std::cout << "IF: Flushed due to branch" << std::endl;
-        }
+        if (debug) { std::cout << "IF: Flushed due to branch" << std::endl; }
         return;
     }
-
     if (PC >= maxPC) {
         if_id.valid = false;
-        if (debug) {
-            std::cout << "IF: End of program reached at PC " << PC << std::endl;
-        }
+        if (debug) { std::cout << "IF: End of program reached at PC " << PC << std::endl; }
         return;
     }
 
     string inst_str = get_instruction(instMem);
     if (inst_str == "00000000") {
         if_id.valid = false;
-        if (debug) {
-            std::cout << "IF: NOP instruction (all zeros)" << std::endl;
-        }
+        if (debug) { std::cout << "IF: NOP instruction (all zeros)" << std::endl; }
         return;
     }
-
     if_id.instruction = std::stoul(inst_str, nullptr, 16);
     if_id.pc = PC;
     if_id.valid = true;
@@ -538,7 +524,6 @@ void CPU::instruction_fetch(char* instMem, bool debug) {
                   << " at PC 0x" << if_id.pc << std::dec << std::endl;
         std::cout << "IF: Raw instruction string: " << inst_str << std::endl;
     }
-
     incPC();
 }
 
