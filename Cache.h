@@ -21,8 +21,8 @@ public:
     {
         // basic sanity
         assert(lower_);
-        assert((size_ & (size_-1)) != 1); // power-of-two check (relaxed)
-        assert((lineSize_ & (lineSize_-1)) != 1);
+        assert((size_ & (size_-1)) == 0); // power-of-two check
+        assert((lineSize_ & (lineSize_-1)) == 0); // power-of-two check
         assert(numLines_ > 0);
     }
 

@@ -265,7 +265,7 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
 
             if (*funct3 == 0x0) // BEQ
                 *aluOp = 0x30;
-            else if (*funct3 == 0x1) // BNE
+            else if (*funct3 == 0x2) // BNE
                 *aluOp = 0x35;
             else if (*funct3 == 0x4) // BLT
                 *aluOp = 0x33;
@@ -558,17 +558,22 @@ void CPU::instruction_decode(bool debug) {
                                    &memWr, &memToReg, &upperIm, &aluOp,
                                    &opcode, &rd, &funct3, &rs1, &rs2, &funct7, debug);
 
-    // Load-use hazard detection
-    if (id_ex.memRe && (
-        (id_ex.rd != 0 && id_ex.rd == rs1) || 
-        (id_ex.rd != 0 && id_ex.rd == rs2))) {
+    // Load-use hazard detection - disabled for now, relying on forwarding
+    // TODO: Implement proper load-use hazard detection
+    /*
+    if (id_ex.memRe && id_ex.regWrite && id_ex.rd != 0 && (
+        (id_ex.rd == rs1 && rs1 != 0) || 
+        (id_ex.rd == rs2 && rs2 != 0))) {
 
         pipeline_stall = true;
         if (debug) {
             std::cout << "ID: Load-use hazard detected. Stalling pipeline." << std::endl;
+            std::cout << "    Previous instruction: rd=" << id_ex.rd << ", memRe=" << id_ex.memRe << std::endl;
+            std::cout << "    Current instruction: rs1=" << rs1 << ", rs2=" << rs2 << std::endl;
         }
         return;
     }
+    */
 
     if (!valid) {
         id_ex.valid = false;
@@ -675,7 +680,10 @@ void CPU::execute_stage(bool debug) {
 
         PC = id_ex.pc + id_ex.immediate;
         pipeline_flush = true;
-        if (debug) { std::cout << "EX: JAL taken to " << PC << ", link=" << (id_ex.pc+4) << std::endl; }
+        if (debug) { 
+            std::cout << "EX: JAL taken to " << PC << ", link=" << (id_ex.pc+4) 
+                      << ", immediate=" << id_ex.immediate << std::endl; 
+        }
         return;
     }
     if (id_ex.opcode == 0x67) { // JALR
@@ -712,6 +720,12 @@ void CPU::execute_stage(bool debug) {
             case 0x34: should_branch = !alu.isZero(); break; // BLTU
         }
 
+        if (debug) {
+            std::cout << "EX: Branch decision - aluOp=" << std::hex << id_ex.aluOp 
+                      << ", alu.isZero()=" << alu.isZero() 
+                      << ", should_branch=" << should_branch << std::dec << std::endl;
+        }
+
         if (should_branch) {
             // immediate already byte-scaled in generate_immediate()
             PC = id_ex.pc + id_ex.immediate;
@@ -723,6 +737,17 @@ void CPU::execute_stage(bool debug) {
         }
     }
 
+    // Forward rs2_data for store operations
+    int32_t forwarded_rs2_data;
+    if (ex_mem_prev.regWrite && ex_mem_prev.rd != 0 && ex_mem_prev.rd == id_ex.rs2) {
+        forwarded_rs2_data = ex_mem_prev.alu_result;
+    }
+    else if (mem_wb_prev.regWrite && mem_wb_prev.rd != 0 && mem_wb_prev.rd == id_ex.rs2) {
+        forwarded_rs2_data = mem_wb_prev.memToReg ? mem_wb_prev.mem_data : mem_wb_prev.alu_result;
+    } else {
+        forwarded_rs2_data = id_ex.rs2_data;
+    }
+
     // Update EX/MEM register
     ex_mem.regWrite = id_ex.regWrite;
     ex_mem.memRe = id_ex.memRe;
@@ -731,7 +756,7 @@ void CPU::execute_stage(bool debug) {
     ex_mem.memReadType  = id_ex.memReadType;
     ex_mem.memWriteType = id_ex.memWriteType;
     ex_mem.alu_result = alu_result;
-    ex_mem.rs2_data = id_ex.rs2_data;
+    ex_mem.rs2_data = forwarded_rs2_data;
     ex_mem.rd = id_ex.rd;
     ex_mem.pc = id_ex.pc;
     ex_mem.valid = true;
@@ -740,8 +765,17 @@ void CPU::execute_stage(bool debug) {
         std::cout << "EX: ALU operation - " << operand1 << " op " << operand2 << " = " << alu_result << std::endl;
 
         if (id_ex.branch) {
+            bool should_branch = false;
+            switch (id_ex.aluOp) {
+                case 0x30: should_branch = alu.isZero(); break; // BEQ
+                case 0x35: should_branch = !alu.isZero(); break; // BNE
+                case 0x31: should_branch = alu.isZero(); break;  // BGE
+                case 0x33: should_branch = !alu.isZero(); break; // BLT
+                case 0x32: should_branch = alu.isZero(); break;  // BGEU
+                case 0x34: should_branch = !alu.isZero(); break; // BLTU
+            }
             std::cout << "EX: Branch instruction ";
-            std::cout << (alu.isZero() ? "taken" : "not taken");
+            std::cout << (should_branch ? "taken" : "not taken");
             std::cout << " (Zero flag = " << alu.isZero() << ")" << std::endl;
         }
     }
@@ -822,7 +856,10 @@ void CPU::run_pipeline_cycle(char* instMem, int cycle, bool debug) {
         log_pipeline_state(cycle);
     }
 
-    pipeline_stall = false;
+    // Clear pipeline stall when the load instruction has moved past the EX stage
+    if (pipeline_stall && !id_ex.memRe) {
+        pipeline_stall = false;
+    }
 }
 
 
