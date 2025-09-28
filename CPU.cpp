@@ -366,23 +366,21 @@ int32_t CPU::generate_immediate(uint32_t instruction, int opcode) {
             break;
             
         case 0x63: // Branch Instructions (BEQ, BGE, BGEU)
-            // Immediate is split into multiple parts
-            imm = ((instruction >> 19) & 0x1000) | // imm[12]
-                  ((instruction << 4) & 0x800) |    // imm[11]
-                  ((instruction >> 20) & 0x7E0) |   // imm[10:5]
-                  ((instruction >> 7) & 0x1E);      // imm[4:1]
+            // B-type immediate encoding: imm[12|10:5] in bits 31:25, imm[4:1|11] in bits 11:7
+            imm = ((instruction >> 31) & 0x1) << 12 |  // imm[12]
+                  ((instruction >> 7) & 0x1) << 11 |   // imm[11]
+                  ((instruction >> 25) & 0x3F) << 5 |  // imm[10:5]
+                  ((instruction >> 8) & 0xF) << 1;     // imm[4:1]
             imm = sign_extend(imm, 13);
-            imm <<= 1; // B-type encodes bit0=0; produce byte offset here
             break;
             
         case 0x6F: // JAL
-            // 20-bit immediate
-            imm = ((instruction >> 11) & 0x100000) | // imm[20]
-                  (instruction & 0xFF000) |           // imm[19:12]
-                  ((instruction >> 9) & 0x800) |      // imm[11]
-                  ((instruction >> 20) & 0x7FE);      // imm[10:1]
+            // UJ-type immediate encoding: imm[20|10:1|11|19:12] in bits 31:12
+            imm = ((instruction >> 31) & 0x1) << 20 |  // imm[20]
+                  ((instruction >> 21) & 0x3FF) << 1 | // imm[10:1]
+                  ((instruction >> 20) & 0x1) << 11 |  // imm[11]
+                  ((instruction >> 12) & 0xFF) << 12;  // imm[19:12]
             imm = sign_extend(imm, 21);
-            imm <<= 1; // UJ-type encodes bit0=0; produce byte offset here
             break;
             
         case 0x37: // LUI
@@ -715,9 +713,9 @@ void CPU::execute_stage(bool debug) {
             case 0x30: should_branch = alu.isZero(); break; // BEQ
             case 0x35: should_branch = !alu.isZero(); break; // BNE
             case 0x31: should_branch = alu.isZero(); break;  // BGE
-            case 0x33: should_branch = !alu.isZero(); break; // BLT
+            case 0x33: should_branch = alu.isZero(); break; // BLT
             case 0x32: should_branch = alu.isZero(); break;  // BGEU
-            case 0x34: should_branch = !alu.isZero(); break; // BLTU
+            case 0x34: should_branch = alu.isZero(); break; // BLTU
         }
 
         if (debug) {
@@ -770,9 +768,9 @@ void CPU::execute_stage(bool debug) {
                 case 0x30: should_branch = alu.isZero(); break; // BEQ
                 case 0x35: should_branch = !alu.isZero(); break; // BNE
                 case 0x31: should_branch = alu.isZero(); break;  // BGE
-                case 0x33: should_branch = !alu.isZero(); break; // BLT
+                case 0x33: should_branch = alu.isZero(); break; // BLT
                 case 0x32: should_branch = alu.isZero(); break;  // BGEU
-                case 0x34: should_branch = !alu.isZero(); break; // BLTU
+                case 0x34: should_branch = alu.isZero(); break; // BLTU
             }
             std::cout << "EX: Branch instruction ";
             std::cout << (should_branch ? "taken" : "not taken");
