@@ -95,21 +95,33 @@ int32_t ALU::execute(int32_t operand1, int32_t operand2, int aluOp) {
             break;
             
         case 0x30: // BEQ
+            result = operand1 - operand2;
+            zero_flag = (result == 0);
+            break;
+
         case 0x35: // BNE
-            result = (operand1 == operand2) ? 1 : 0;
-            zero_flag = (result == 1);
+            result = operand1 - operand2;
+            zero_flag = (result == 0);
             break;
 
         case 0x31: // BGE
+            result = operand1 - operand2;
+            zero_flag = (result >= 0);
+            break;
+
         case 0x33: // BLT
-            result = (operand1 >= operand2) ? 1 : 0;
-            zero_flag = (result == 1);
+            result = operand1 - operand2;
+            zero_flag = (result < 0);
             break;
 
         case 0x32: // BGEU
+            result = operand1 - operand2;
+            zero_flag = (static_cast<uint32_t>(operand1) >= static_cast<uint32_t>(operand2));
+            break;
+
         case 0x34: // BLTU
-            result = (static_cast<unsigned int>(operand1) >= static_cast<unsigned int>(operand2)) ? 1 : 0;
-            zero_flag = (result == 1);
+            result = operand1 - operand2;
+            zero_flag = (static_cast<uint32_t>(operand1) < static_cast<uint32_t>(operand2));
             break;
             
         case 0xF: // LUI (Load Upper Immediate)
