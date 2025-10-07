@@ -10,48 +10,53 @@ A comprehensive, cycle-accurate RISC-V CPU simulator implemented in C++ that dem
 - **Load/Store Instructions**: LW, SW, LB, LBU, LH, LHU, SB, SH
 - **Branch Instructions**: BEQ, BNE, BLT, BGE, BLTU, BGEU
 - **Jump Instructions**: JAL, JALR
-- **Upper Immediate**: LUI
+- **Upper Immediate**: LUI, AUIPC
 
 ### **Architecture Components**
 - **5-stage Pipeline Simulation**: Fetch, Decode, Execute, Memory, Writeback
 - **32-bit RISC-V Architecture**: Full register file with 32 general-purpose registers
-- **Memory Management**: 4KB data memory with proper alignment checking
+- **Memory Hierarchy**: ✅ **Direct-mapped, write-through cache (configurable size/line) backed by main memory**
 - **ALU Operations**: Arithmetic, logical, shift, and comparison operations
-- **Control Unit**: Comprehensive control signal generation for all instruction types
+- **Control Unit**: Control signal generation for all instruction types
+- **Branch Handling**: Branches resolved in EX stage (no prediction)
 
 ## 🛠️ Technical Implementation
 
 ### **Key Design Decisions**
-- **Modular Architecture**: Separate ALU and CPU classes for clean separation of concerns
+- **Modular Architecture**: Separate ALU, CPU, Memory, and Cache classes
 - **Little-Endian Memory**: Proper byte ordering for RISC-V compatibility
 - **Sign Extension**: Correct handling of immediate values and memory loads
-- **Branch Prediction**: Simple static branch prediction with PC-relative addressing
-- **Memory Alignment**: Hardware-enforced alignment checking for load/store operations
+- **Alignment Checking**: Hardware-enforced alignment for load/store
+- **Forwarding**: Basic data forwarding support in the pipeline
 
 ### **Performance Optimizations**
 - **Efficient Instruction Decoding**: Bit-level manipulation for fast field extraction
-- **Optimized ALU**: Single-cycle execution for all arithmetic and logical operations
-- **Memory Access Patterns**: Optimized for typical RISC-V memory access patterns
+- **Single-Cycle ALU**: All arithmetic/logical operations complete in one cycle
+- **Cache Integration**: ✅ **Reduced average memory access latency via direct-mapped cache with hit/miss statistics**
 
 ## 📁 Project Structure
 
+
+
 ```
 CPU_SIM/
-├── CPU.cpp              # Main CPU implementation
-├── CPU.h                # CPU class definition
-├── ALU.cpp              # Arithmetic Logic Unit
-├── ALU.h                # ALU class definition
-├── cpusim.cpp           # Main simulator entry point
-├── assembly_translations/  # Human-readable assembly code
-│   ├── 24r.txt          # R-type instruction tests
-│   ├── 24swr.txt        # Store/Write/Read tests
-│   ├── 24jswr.txt       # Jump/Store/Write/Read tests
-│   └── comprehensive_test.txt  # Complete instruction set test
-├── instruction_memory/  # Machine code (little-endian)
-│   ├── 24instMem-r.txt
-│   ├── 24instMem-swr.txt
-│   ├── 24instMem-jswr.txt
-│   └── comprehensive_test.txt
+├── CPU.cpp # Main CPU implementation
+├── CPU.h # CPU class definition
+├── ALU.cpp # Arithmetic Logic Unit
+├── ALU.h # ALU class definition
+├── Cache.h # ✅ Direct-mapped cache implementation (header-only)
+├── cpusim.cpp # Simulator entry point with cache integration
+├── MemoryIf.h # Memory interface abstraction
+├── assembly_translations/ # Human-readable assembly programs
+│ ├── r.txt # R-type tests
+│ ├── swr.txt # Store/Write/Read tests
+│ ├── jswr.txt # Jump/Store/Write/Read tests
+│ └── all.txt # Comprehensive test
+├── instruction_memory/ # Corresponding machine code
+│ ├── instMem-r.txt
+│ ├── instMem-swr.txt
+│ ├── instMem-jswr.txt
+│ └── instMem-all.txt
 └── README.md
 ```
 
@@ -65,17 +70,22 @@ g++ *.cpp -o cpusim
 ### **Running Test Programs**
 ```bash
 # Basic R-type instruction test
-./cpusim instruction_memory/24instMem-r.txt
+./cpusim instruction_memory/instMem-r.txt
 
 # Store/Write/Read operations test
-./cpusim instruction_memory/24instMem-swr.txt
+./cpusim instruction_memory/instMem-swr.txt
 
 # Jump/Store/Write/Read operations test
-./cpusim instruction_memory/24instMem-jswr.txt
+./cpusim instruction_memory/instMem-jswr.txt
 
 # Comprehensive instruction set test
-./cpusim instruction_memory/comprehensive_test.txt
+./cpusim instruction_memory/instMem-all.txt
 ```
+
+### **Optional Command-Line Flags**
+
+--debug : Print detailed pipeline stage debug output
+--log <filename> : Save pipeline execution trace to a log file
 
 ### **Expected Output**
 The simulator displays final register values after program execution:
@@ -94,10 +104,18 @@ t2: 512
 ## 🧪 Testing and Validation
 
 ### **Test Programs**
-- **24r.txt**: Tests basic R-type arithmetic and logical operations
-- **24swr.txt**: Tests memory operations (load/store) with register operations
-- **24jswr.txt**: Tests control flow (jumps/branches) with memory operations
-- **comprehensive_test.txt**: Complete instruction set validation
+- **r.txt**: Tests basic R-type arithmetic and logical operations
+- **swr.txt**: Tests memory operations (load/store) with register operations
+- **jswr.txt**: Tests control flow (jumps/branches) with memory operations
+- **all.txt**: Complete instruction set validation
+
+### **Cache System Verification**
+The cache system has been tested and verified with:
+- ✅ **Compilation**: Clean compilation with C++11 compatibility
+- ✅ **Execution**: All test programs run successfully with cache integration
+- ✅ **Memory Operations**: Load/store operations work correctly through cache
+- ✅ **Hit/Miss Tracking**: Cache statistics are properly maintained
+- ✅ **Write Policy**: Write-through with write-allocate policy functioning correctly
 
 ### **Verification**
 Each test program includes expected output values for verification. The comprehensive test validates:
@@ -107,6 +125,8 @@ Each test program includes expected output values for verification. The comprehe
 - Comparison operations (SLT, SLTU, SLTI, SLTIU)
 - Memory operations (LW, SW, LB, SB, LH, SH)
 - Control flow (BEQ, BNE, JAL)
+
+
 
 ## 🎯 Educational Value
 
@@ -128,7 +148,8 @@ This project demonstrates:
 
 Potential improvements for advanced features:
 - **Pipelining**: Full 5-stage pipeline with hazard detection
-- **Cache Simulation**: Multi-level cache hierarchy
+- **Cache Simulation**: Multi-level cache hierarchy (L2/L3 caches)
+- **Cache Policies**: Set-associative and fully-associative cache implementations
 - **Floating Point**: RV32F floating-point instruction support
 - **Interrupts**: Exception handling and interrupt processing
 - **Performance Analysis**: Cycle counting and performance metrics
