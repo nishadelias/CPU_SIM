@@ -6,6 +6,8 @@
 #include<stdlib.h>
 #include <string>
 #include <fstream>
+#include <vector>
+#include <map>
 #include "ALU.h"
 #include <cstdint>
 #include "MemoryIf.h"
@@ -90,6 +92,111 @@ struct MEM_WB_Register {
                        alu_result(0), mem_data(0), rd(0), pc(0), valid(false) {}
 };
 
+// Pipeline snapshot for GUI visualization
+struct PipelineSnapshot {
+    int cycle;
+    bool stall;
+    bool flush;
+    
+    // IF/ID stage
+    struct {
+        bool valid;
+        uint32_t pc;
+        uint32_t instruction;
+        string disassembly;
+    } if_id;
+    
+    // ID/EX stage
+    struct {
+        bool valid;
+        uint32_t pc;
+        string disassembly;
+        string opcode_name;
+    } id_ex;
+    
+    // EX/MEM stage
+    struct {
+        bool valid;
+        uint32_t pc;
+        string disassembly;
+        int32_t alu_result;
+    } ex_mem;
+    
+    // MEM/WB stage
+    struct {
+        bool valid;
+        uint32_t pc;
+        string disassembly;
+        int32_t write_data;
+    } mem_wb;
+    
+    PipelineSnapshot() : cycle(0), stall(false), flush(false) {
+        if_id.valid = false;
+        id_ex.valid = false;
+        ex_mem.valid = false;
+        mem_wb.valid = false;
+    }
+};
+
+// Statistics tracking structure
+struct CPUStatistics {
+    // Instruction counts by type
+    uint64_t total_instructions;
+    uint64_t r_type_count;
+    uint64_t i_type_count;
+    uint64_t load_count;
+    uint64_t store_count;
+    uint64_t branch_count;
+    uint64_t jump_count;
+    uint64_t lui_auipc_count;
+    
+    // Pipeline events
+    uint64_t stall_count;
+    uint64_t flush_count;
+    uint64_t branch_taken_count;
+    uint64_t branch_not_taken_count;
+    
+    // Performance metrics
+    uint64_t total_cycles;
+    uint64_t instructions_retired;
+    
+    // Cache statistics (will be populated from cache)
+    uint64_t cache_hits;
+    uint64_t cache_misses;
+    
+    // Memory access tracking
+    uint64_t memory_reads;
+    uint64_t memory_writes;
+    
+    CPUStatistics() : total_instructions(0), r_type_count(0), i_type_count(0),
+                     load_count(0), store_count(0), branch_count(0), jump_count(0),
+                     lui_auipc_count(0), stall_count(0), flush_count(0),
+                     branch_taken_count(0), branch_not_taken_count(0),
+                     total_cycles(0), instructions_retired(0),
+                     cache_hits(0), cache_misses(0),
+                     memory_reads(0), memory_writes(0) {}
+    
+    double getCPI() const {
+        if (instructions_retired == 0) return 0.0;
+        return static_cast<double>(total_cycles) / static_cast<double>(instructions_retired);
+    }
+    
+    double getCacheHitRate() const {
+        uint64_t total_accesses = cache_hits + cache_misses;
+        if (total_accesses == 0) return 0.0;
+        return static_cast<double>(cache_hits) / static_cast<double>(total_accesses) * 100.0;
+    }
+    
+    double getPipelineUtilization() const {
+        if (total_cycles == 0) return 0.0;
+        // Ideal: 5 instructions per cycle (one per stage)
+        // Actual: instructions_retired / cycles
+        double ideal_throughput = 5.0;
+        double actual_throughput = static_cast<double>(instructions_retired) / static_cast<double>(total_cycles);
+        return (actual_throughput / ideal_throughput) * 100.0;
+    }
+};
+
 class CPU {
 private:
     // Removed old internal dmemory[]. Now we go through a pluggable interface:
@@ -123,6 +230,14 @@ private:
     // Logging
     bool enable_logging;
     ofstream log_file;
+    
+    // Statistics and tracing for GUI
+    CPUStatistics stats_;
+    vector<PipelineSnapshot> pipeline_trace_;
+    bool enable_tracing_;
+    
+    // Helper to capture pipeline snapshot
+    void capture_pipeline_snapshot(int cycle);
 
     // Pipeline stage methods
     void instruction_fetch(char* instMem, bool debug);
@@ -166,4 +281,19 @@ public:
 
     // NEW: wire in the memory hierarchy from main()
     void set_data_memory(MemoryDevice* dev) { dmem_ = dev; }
+    
+    // Statistics and tracing for GUI
+    void enable_tracing(bool enable) { enable_tracing_ = enable; }
+    const CPUStatistics& get_statistics() const { return stats_; }
+    const vector<PipelineSnapshot>& get_pipeline_trace() const { return pipeline_trace_; }
+    void clear_trace() { pipeline_trace_.clear(); }
+    
+    // Get current pipeline state (for real-time GUI updates)
+    PipelineSnapshot get_current_pipeline_state(int cycle) const;
+    
+    // Get register values (for GUI)
+    const int32_t* get_all_registers() const { return registers; }
+    
+    // Get cache statistics (requires cache to be set)
+    bool get_cache_stats(uint64_t& hits, uint64_t& misses) const;
 };

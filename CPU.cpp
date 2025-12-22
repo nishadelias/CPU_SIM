@@ -1,6 +1,7 @@
 // file: CPU.cpp
 
 #include "CPU.h"
+#include "Cache.h"
 #include <iomanip>
 #include <iostream>
 
@@ -19,6 +20,7 @@ CPU::CPU()
     pipeline_flush = false;
     maxPC = 0;
     enable_logging = false;
+    enable_tracing_ = false;
     dmem_ = NULL;
 
     // dmem_ will be set by main(); we keep nullptr check in load/store
@@ -581,6 +583,18 @@ void CPU::instruction_decode(bool debug) {
         return;
     }
 
+    // Track instruction type statistics
+    stats_.total_instructions++;
+    switch (opcode) {
+        case 0x33: stats_.r_type_count++; break;
+        case 0x13: stats_.i_type_count++; break;
+        case 0x03: stats_.load_count++; break;
+        case 0x23: stats_.store_count++; break;
+        case 0x63: stats_.branch_count++; break;
+        case 0x67: case 0x6F: stats_.jump_count++; break;
+        case 0x37: case 0x17: stats_.lui_auipc_count++; break;
+    }
+
     // Read register values
     int32_t rs1_data = (rs1 != 0) ? get_register_value(rs1) : 0;
     int32_t rs2_data = (rs2 != 0) ? get_register_value(rs2) : 0;
@@ -728,11 +742,19 @@ void CPU::execute_stage(bool debug) {
             // immediate already byte-scaled in generate_immediate()
             PC = id_ex.pc + id_ex.immediate;
             pipeline_flush = true;
+            stats_.branch_taken_count++;
 
             if (debug) {
                 std::cout << "EX: Branch taken. Flushing pipeline." << std::endl;
             }
+        } else {
+            stats_.branch_not_taken_count++;
         }
+    }
+    
+    // Track jumps
+    if (id_ex.opcode == 0x6F || id_ex.opcode == 0x67) {
+        stats_.branch_taken_count++; // Jumps are always taken
     }
 
     // Forward rs2_data for store operations
@@ -795,12 +817,14 @@ void CPU::memory_stage(bool debug) {
     if (ex_mem.memRe) {
         // Load operation
         mem_data = read_memory(ex_mem.alu_result, ex_mem.memReadType);
+        stats_.memory_reads++;
         if (debug) {
             std::cout << "MEM: Load from address " << ex_mem.alu_result << " = " << mem_data << std::endl;
         }
     } else if (ex_mem.memWr) {
         // Store operation
         write_memory(ex_mem.alu_result, ex_mem.rs2_data, ex_mem.memWriteType);
+        stats_.memory_writes++;
         if (debug) {
             std::cout << "MEM: Store " << ex_mem.rs2_data << " to address " << ex_mem.alu_result << std::endl;
         }
@@ -827,11 +851,15 @@ void CPU::write_back_stage(bool debug) {
     if (mem_wb.regWrite && mem_wb.rd != 0) {
         int32_t write_data = mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result;
         registers[mem_wb.rd] = write_data;
+        stats_.instructions_retired++;
         
         if (debug) {
             std::cout << std::dec;
             std::cout << "WB: Write " << write_data << " to register " << REGISTER_NAMES[mem_wb.rd] << std::endl;
         }
+    } else if (mem_wb.valid) {
+        // Count instructions that complete even if they don't write to registers
+        stats_.instructions_retired++;
     }
 }
 
@@ -839,6 +867,20 @@ void CPU::run_pipeline_cycle(char* instMem, int cycle, bool debug) {
     if (debug) {
         std::cout << "\n=== Cycle " << cycle << " ===" << std::endl;
     }
+
+    // Update statistics
+    stats_.total_cycles = cycle;
+    
+    // Update cache statistics
+    uint64_t cache_hits, cache_misses;
+    if (get_cache_stats(cache_hits, cache_misses)) {
+        stats_.cache_hits = cache_hits;
+        stats_.cache_misses = cache_misses;
+    }
+    
+    // Track stalls and flushes (count cycles with stalls/flushes)
+    // Note: These are tracked in the pipeline stages themselves, 
+    // but we also track them here for cycle-level statistics
 
     // Take snapshots so EX can see last cycle's values
     ex_mem_prev = ex_mem;
@@ -849,6 +891,11 @@ void CPU::run_pipeline_cycle(char* instMem, int cycle, bool debug) {
     execute_stage(debug);
     instruction_decode(debug);
     instruction_fetch(instMem, debug);
+
+    // Capture pipeline snapshot for GUI
+    if (enable_tracing_) {
+        capture_pipeline_snapshot(cycle);
+    }
 
     if (enable_logging) {
         log_pipeline_state(cycle);
@@ -1022,4 +1069,110 @@ void CPU::log_instruction_disassembly(uint32_t instruction, uint32_t pc) {
     if (!log_file.is_open()) return;
     
     log_file << "PC=0x" << std::hex << pc << ": " << disassemble_instruction(instruction) << std::dec << std::endl;
+}
+
+// Statistics and tracing implementation
+void CPU::capture_pipeline_snapshot(int cycle) {
+    if (!enable_tracing_) return;
+    
+    PipelineSnapshot snapshot;
+    snapshot.cycle = cycle;
+    snapshot.stall = pipeline_stall;
+    snapshot.flush = pipeline_flush;
+    
+    // Capture IF/ID stage
+    snapshot.if_id.valid = if_id.valid;
+    snapshot.if_id.pc = if_id.pc;
+    snapshot.if_id.instruction = if_id.instruction;
+    if (if_id.valid) {
+        snapshot.if_id.disassembly = disassemble_instruction(if_id.instruction);
+    }
+    
+    // Capture ID/EX stage
+    snapshot.id_ex.valid = id_ex.valid;
+    snapshot.id_ex.pc = id_ex.pc;
+    if (id_ex.valid) {
+        snapshot.id_ex.disassembly = disassemble_instruction(if_id.instruction); // Use IF/ID instruction
+        // Extract opcode name
+        unsigned int opcode = id_ex.opcode;
+        switch (opcode) {
+            case 0x33: snapshot.id_ex.opcode_name = "R-type"; break;
+            case 0x13: snapshot.id_ex.opcode_name = "I-type"; break;
+            case 0x03: snapshot.id_ex.opcode_name = "Load"; break;
+            case 0x23: snapshot.id_ex.opcode_name = "Store"; break;
+            case 0x63: snapshot.id_ex.opcode_name = "Branch"; break;
+            case 0x67: case 0x6F: snapshot.id_ex.opcode_name = "Jump"; break;
+            case 0x37: case 0x17: snapshot.id_ex.opcode_name = "Upper-Imm"; break;
+            default: snapshot.id_ex.opcode_name = "Unknown"; break;
+        }
+    }
+    
+    // Capture EX/MEM stage
+    snapshot.ex_mem.valid = ex_mem.valid;
+    snapshot.ex_mem.pc = ex_mem.pc;
+    snapshot.ex_mem.alu_result = ex_mem.alu_result;
+    if (ex_mem.valid) {
+        // We need to track the instruction that's in EX/MEM
+        // For now, use a placeholder - in a full implementation, we'd track this
+        snapshot.ex_mem.disassembly = "EX/MEM";
+    }
+    
+    // Capture MEM/WB stage
+    snapshot.mem_wb.valid = mem_wb.valid;
+    snapshot.mem_wb.pc = mem_wb.pc;
+    snapshot.mem_wb.write_data = mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result;
+    if (mem_wb.valid) {
+        snapshot.mem_wb.disassembly = "MEM/WB";
+    }
+    
+    pipeline_trace_.push_back(snapshot);
+}
+
+PipelineSnapshot CPU::get_current_pipeline_state(int cycle) const {
+    PipelineSnapshot snapshot;
+    snapshot.cycle = cycle;
+    snapshot.stall = pipeline_stall;
+    snapshot.flush = pipeline_flush;
+    
+    // Capture current IF/ID stage
+    snapshot.if_id.valid = if_id.valid;
+    snapshot.if_id.pc = if_id.pc;
+    snapshot.if_id.instruction = if_id.instruction;
+    if (if_id.valid) {
+        snapshot.if_id.disassembly = disassemble_instruction(if_id.instruction);
+    }
+    
+    // Capture current ID/EX stage
+    snapshot.id_ex.valid = id_ex.valid;
+    snapshot.id_ex.pc = id_ex.pc;
+    if (id_ex.valid) {
+        snapshot.id_ex.disassembly = disassemble_instruction(if_id.instruction);
+    }
+    
+    // Capture current EX/MEM stage
+    snapshot.ex_mem.valid = ex_mem.valid;
+    snapshot.ex_mem.pc = ex_mem.pc;
+    snapshot.ex_mem.alu_result = ex_mem.alu_result;
+    
+    // Capture current MEM/WB stage
+    snapshot.mem_wb.valid = mem_wb.valid;
+    snapshot.mem_wb.pc = mem_wb.pc;
+    snapshot.mem_wb.write_data = mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result;
+    
+    return snapshot;
+}
+
+bool CPU::get_cache_stats(uint64_t& hits, uint64_t& misses) const {
+    if (!dmem_) return false;
+    
+    // Try to cast to DirectMappedCache to get stats
+    // Note: This requires RTTI (Run-Time Type Information)
+    DirectMappedCache* cache = dynamic_cast<DirectMappedCache*>(dmem_);
+    if (cache) {
+        hits = cache->hits();
+        misses = cache->misses();
+        return true;
+    }
+    
+    return false;
 }
