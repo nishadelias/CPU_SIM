@@ -1,4 +1,5 @@
 // file: CPU.h
+#pragma once
 
 #include <iostream>
 #include <bitset>
@@ -197,6 +198,55 @@ struct CPUStatistics {
     }
 };
 
+// Memory access record for tracking memory addresses
+struct MemoryAccess {
+    int cycle;
+    uint32_t address;
+    bool is_write;
+    uint32_t value;
+    uint32_t pc;  // PC of instruction that accessed memory
+    string instruction_disassembly;
+    
+    MemoryAccess() : cycle(0), address(0), is_write(false), value(0), pc(0) {}
+    MemoryAccess(int c, uint32_t addr, bool write, uint32_t val, uint32_t instruction_pc, const string& disasm)
+        : cycle(c), address(addr), is_write(write), value(val), pc(instruction_pc), instruction_disassembly(disasm) {}
+};
+
+// Register value change record
+struct RegisterChange {
+    int cycle;
+    unsigned int register_num;
+    int32_t old_value;
+    int32_t new_value;
+    uint32_t pc;  // PC of instruction that changed register
+    string instruction_disassembly;
+    
+    RegisterChange() : cycle(0), register_num(0), old_value(0), new_value(0), pc(0) {}
+    RegisterChange(int c, unsigned int reg, int32_t old_val, int32_t new_val, uint32_t instruction_pc, const string& disasm)
+        : cycle(c), register_num(reg), old_value(old_val), new_value(new_val), pc(instruction_pc), instruction_disassembly(disasm) {}
+};
+
+// Instruction dependency record
+struct InstructionDependency {
+    uint32_t producer_pc;      // PC of instruction that produces value
+    uint32_t consumer_pc;       // PC of instruction that consumes value
+    unsigned int register_num;  // Register involved in dependency
+    string dependency_type;    // "RAW", "WAR", "WAW"
+    int producer_cycle;        // Cycle when producer writes
+    int consumer_cycle;         // Cycle when consumer reads/writes
+    string producer_disassembly;
+    string consumer_disassembly;
+    
+    InstructionDependency() : producer_pc(0), consumer_pc(0), register_num(0), 
+                              producer_cycle(0), consumer_cycle(0) {}
+    InstructionDependency(uint32_t prod_pc, uint32_t cons_pc, unsigned int reg, 
+                          const string& dep_type, int prod_cyc, int cons_cyc,
+                          const string& prod_disasm, const string& cons_disasm)
+        : producer_pc(prod_pc), consumer_pc(cons_pc), register_num(reg), dependency_type(dep_type),
+          producer_cycle(prod_cyc), consumer_cycle(cons_cyc),
+          producer_disassembly(prod_disasm), consumer_disassembly(cons_disasm) {}
+};
+
 class CPU {
 private:
     // Removed old internal dmemory[]. Now we go through a pluggable interface:
@@ -236,8 +286,25 @@ private:
     vector<PipelineSnapshot> pipeline_trace_;
     bool enable_tracing_;
     
+    // Memory address tracking
+    vector<MemoryAccess> memory_access_history_;
+    
+    // Register value history tracking
+    vector<RegisterChange> register_history_;
+    int32_t previous_register_values_[32];  // Track previous values for change detection
+    
+    // Instruction dependency tracking
+    vector<InstructionDependency> instruction_dependencies_;
+    map<uint32_t, int> pc_to_cycle_map_;  // Map PC to cycle when instruction was in WB stage
+    map<uint32_t, unsigned int> pc_to_rd_map_;  // Map PC to destination register
+    
     // Helper to capture pipeline snapshot
     void capture_pipeline_snapshot(int cycle);
+    
+    // Helper methods for tracking
+    void track_memory_access(int cycle, uint32_t address, bool is_write, uint32_t value, uint32_t pc);
+    void track_register_change(int cycle, unsigned int reg, int32_t old_value, int32_t new_value, uint32_t pc);
+    void track_instruction_dependencies(int cycle, uint32_t pc, unsigned int rd, unsigned int rs1, unsigned int rs2);
 
     // Pipeline stage methods
     void instruction_fetch(char* instMem, bool debug);
@@ -247,12 +314,12 @@ private:
     void write_back_stage(bool debug);
 
     // Helper methods
-    string disassemble_instruction(uint32_t instruction);
+    string disassemble_instruction(uint32_t instruction) const;
     void log_pipeline_state(int cycle);
     void log_instruction_disassembly(uint32_t instruction, uint32_t pc);
 
-    int32_t generate_immediate(uint32_t instruction, int opcode);
-    int32_t sign_extend(int32_t value, int bits);
+    int32_t generate_immediate(uint32_t instruction, int opcode) const;
+    int32_t sign_extend(int32_t value, int bits) const;
     bool check_address_alignment(uint32_t address, uint32_t bytes);
 
 public:
@@ -278,6 +345,7 @@ public:
     void set_logging(bool enable, string log_filename = "");
     bool is_pipeline_empty();
     void set_max_pc(int max_pc);
+    void reset();  // Reset CPU to initial state
 
     // NEW: wire in the memory hierarchy from main()
     void set_data_memory(MemoryDevice* dev) { dmem_ = dev; }
@@ -296,4 +364,16 @@ public:
     
     // Get cache statistics (requires cache to be set)
     bool get_cache_stats(uint64_t& hits, uint64_t& misses) const;
+    
+    // Memory address tracking accessors
+    const vector<MemoryAccess>& get_memory_access_history() const { return memory_access_history_; }
+    void clear_memory_history() { memory_access_history_.clear(); }
+    
+    // Register history accessors
+    const vector<RegisterChange>& get_register_history() const { return register_history_; }
+    void clear_register_history() { register_history_.clear(); }
+    
+    // Instruction dependency accessors
+    const vector<InstructionDependency>& get_instruction_dependencies() const { return instruction_dependencies_; }
+    void clear_dependencies() { instruction_dependencies_.clear(); }
 };

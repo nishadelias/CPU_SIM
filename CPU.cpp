@@ -23,6 +23,11 @@ CPU::CPU()
     enable_tracing_ = false;
     dmem_ = NULL;
 
+    // Initialize tracking structures
+    for (int i = 0; i < 32; i++) {
+        previous_register_values_[i] = 0;
+    }
+
     // dmem_ will be set by main(); we keep nullptr check in load/store
 }
 
@@ -31,6 +36,45 @@ CPU::~CPU()
 	if (log_file.is_open()) {
 		log_file.close();
 	}
+}
+
+void CPU::reset() {
+    PC = 0;
+    
+    // Reset all registers
+    for (int i = 0; i < 32; i++) {
+        registers[i] = 0;
+        previous_register_values_[i] = 0;
+    }
+    
+    // Reset pipeline control
+    pipeline_stall = false;
+    pipeline_flush = false;
+    maxPC = 0;
+    
+    // Reset pipeline registers
+    if_id = IF_ID_Register();
+    id_ex = ID_EX_Register();
+    ex_mem = EX_MEM_Register();
+    mem_wb = MEM_WB_Register();
+    ex_mem_prev = EX_MEM_Register();
+    mem_wb_prev = MEM_WB_Register();
+    
+    // Clear traces and statistics
+    clear_trace();
+    clear_memory_history();
+    clear_register_history();
+    clear_dependencies();
+    
+    // Reset statistics
+    stats_ = CPUStatistics();
+    
+    // Reset maps
+    pc_to_cycle_map_.clear();
+    pc_to_rd_map_.clear();
+    
+    // Note: dmem_ is preserved (set externally)
+    // Note: enable_tracing_ is preserved
 }
 
 
@@ -336,7 +380,7 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
 }
 
 // generates immediate for the given instruction
-int32_t CPU::generate_immediate(uint32_t instruction, int opcode) {
+int32_t CPU::generate_immediate(uint32_t instruction, int opcode) const {
     int32_t imm = 0;
     
     switch(opcode) {
@@ -396,7 +440,7 @@ int32_t CPU::generate_immediate(uint32_t instruction, int opcode) {
 }
 
 // Sign extension helper
-int32_t CPU::sign_extend(int32_t value, int bits) {
+int32_t CPU::sign_extend(int32_t value, int bits) const {
     int32_t sign_bit = (value >> (bits - 1)) & 1;
     if (sign_bit) {
         value |= (~0U << bits);
@@ -623,6 +667,11 @@ void CPU::instruction_decode(bool debug) {
     id_ex.pc = if_id.pc;
     id_ex.valid = true;
 
+    // Track instruction dependencies
+    if (enable_tracing_) {
+        track_instruction_dependencies(stats_.total_cycles, if_id.pc, rd, rs1, rs2);
+    }
+
     if (debug) {
         std::cout << "ID: Decoded instruction - " << disassemble_instruction(if_id.instruction) << std::endl;
         std::cout << "    rs1_data: " << rs1_data << ", rs2_data: " << rs2_data << ", immediate: " << immediate << std::endl;
@@ -818,6 +867,12 @@ void CPU::memory_stage(bool debug) {
         // Load operation
         mem_data = read_memory(ex_mem.alu_result, ex_mem.memReadType);
         stats_.memory_reads++;
+        
+        // Track memory access
+        if (enable_tracing_) {
+            track_memory_access(stats_.total_cycles, ex_mem.alu_result, false, mem_data, ex_mem.pc);
+        }
+        
         if (debug) {
             std::cout << "MEM: Load from address " << ex_mem.alu_result << " = " << mem_data << std::endl;
         }
@@ -825,6 +880,12 @@ void CPU::memory_stage(bool debug) {
         // Store operation
         write_memory(ex_mem.alu_result, ex_mem.rs2_data, ex_mem.memWriteType);
         stats_.memory_writes++;
+        
+        // Track memory access
+        if (enable_tracing_) {
+            track_memory_access(stats_.total_cycles, ex_mem.alu_result, true, ex_mem.rs2_data, ex_mem.pc);
+        }
+        
         if (debug) {
             std::cout << "MEM: Store " << ex_mem.rs2_data << " to address " << ex_mem.alu_result << std::endl;
         }
@@ -850,8 +911,19 @@ void CPU::write_back_stage(bool debug) {
     
     if (mem_wb.regWrite && mem_wb.rd != 0) {
         int32_t write_data = mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result;
+        int32_t old_value = previous_register_values_[mem_wb.rd];
         registers[mem_wb.rd] = write_data;
         stats_.instructions_retired++;
+        
+        // Track register change
+        if (enable_tracing_) {
+            track_register_change(stats_.total_cycles, mem_wb.rd, old_value, write_data, mem_wb.pc);
+            previous_register_values_[mem_wb.rd] = write_data;
+            
+            // Update dependency tracking maps
+            pc_to_cycle_map_[mem_wb.pc] = stats_.total_cycles;
+            pc_to_rd_map_[mem_wb.pc] = mem_wb.rd;
+        }
         
         if (debug) {
             std::cout << std::dec;
@@ -860,6 +932,11 @@ void CPU::write_back_stage(bool debug) {
     } else if (mem_wb.valid) {
         // Count instructions that complete even if they don't write to registers
         stats_.instructions_retired++;
+        
+        // Still track cycle for dependency analysis
+        if (enable_tracing_) {
+            pc_to_cycle_map_[mem_wb.pc] = stats_.total_cycles;
+        }
     }
 }
 
@@ -928,7 +1005,7 @@ void CPU::set_max_pc(int max_pc) {
     maxPC = max_pc;
 }
 
-string CPU::disassemble_instruction(uint32_t instruction) {
+string CPU::disassemble_instruction(uint32_t instruction) const {
     unsigned int opcode = instruction & 0x7F;
     unsigned int rd = (instruction >> 7) & 0x1F;
     unsigned int funct3 = (instruction >> 12) & 0x7;
@@ -1175,4 +1252,134 @@ bool CPU::get_cache_stats(uint64_t& hits, uint64_t& misses) const {
     }
     
     return false;
+}
+
+// Memory address tracking implementation
+void CPU::track_memory_access(int cycle, uint32_t address, bool is_write, uint32_t value, uint32_t pc) {
+    if (!enable_tracing_) return;
+    
+    string disasm = "";
+    // Get disassembly from current pipeline state
+    if (ex_mem.valid && ex_mem.pc == pc) {
+        // Try to find disassembly from pipeline trace
+        for (auto it = pipeline_trace_.rbegin(); it != pipeline_trace_.rend() && it->cycle >= cycle - 5; ++it) {
+            if (it->ex_mem.valid && it->ex_mem.pc == pc) {
+                disasm = it->ex_mem.disassembly;
+                break;
+            }
+        }
+        if (disasm.empty()) {
+            // Fallback: try to disassemble from if_id if available
+            // For now, use a descriptive placeholder
+            disasm = is_write ? "STORE" : "LOAD";
+        }
+    }
+    
+    memory_access_history_.push_back(MemoryAccess(cycle, address, is_write, value, pc, disasm));
+}
+
+// Register value history tracking implementation
+void CPU::track_register_change(int cycle, unsigned int reg, int32_t old_value, int32_t new_value, uint32_t pc) {
+    if (!enable_tracing_) return;
+    if (reg == 0) return;  // Don't track x0 (zero register)
+    
+    string disasm = "";
+    // Get instruction disassembly
+    if (mem_wb.valid && mem_wb.pc == pc) {
+        // Try to find disassembly from pipeline trace
+        for (auto it = pipeline_trace_.rbegin(); it != pipeline_trace_.rend(); ++it) {
+            if (it->mem_wb.valid && it->mem_wb.pc == pc) {
+                disasm = it->mem_wb.disassembly;
+                break;
+            }
+        }
+        if (disasm.empty()) {
+            disasm = "REG_WRITE";
+        }
+    }
+    
+    register_history_.push_back(RegisterChange(cycle, reg, old_value, new_value, pc, disasm));
+}
+
+// Instruction dependency tracking implementation
+void CPU::track_instruction_dependencies(int cycle, uint32_t pc, unsigned int rd, unsigned int rs1, unsigned int rs2) {
+    if (!enable_tracing_) return;
+    
+    // Check for dependencies with previous instructions
+    // RAW (Read After Write): Current instruction reads a register that was written by a previous instruction
+    // WAR (Write After Read): Current instruction writes a register that was read by a previous instruction
+    // WAW (Write After Write): Current instruction writes a register that was written by a previous instruction
+    
+    if (rd != 0) {
+        // Check for WAW dependencies (this instruction writes to rd)
+        for (auto it = pc_to_rd_map_.begin(); it != pc_to_rd_map_.end(); ++it) {
+            if (it->second == rd && it->first != pc) {
+                // Found a WAW dependency
+                int producer_cycle = pc_to_cycle_map_[it->first];
+                string prod_disasm = "";
+                string cons_disasm = "";
+                
+                // Try to get disassembly from trace
+                for (const auto& snapshot : pipeline_trace_) {
+                    if (snapshot.mem_wb.pc == it->first) {
+                        prod_disasm = snapshot.mem_wb.disassembly;
+                    }
+                    if (snapshot.id_ex.pc == pc) {
+                        cons_disasm = snapshot.id_ex.disassembly;
+                    }
+                }
+                
+                instruction_dependencies_.push_back(
+                    InstructionDependency(it->first, pc, rd, "WAW", producer_cycle, cycle, prod_disasm, cons_disasm)
+                );
+            }
+        }
+    }
+    
+    // Check for RAW dependencies (this instruction reads rs1 or rs2)
+    if (rs1 != 0) {
+        for (auto it = pc_to_rd_map_.begin(); it != pc_to_rd_map_.end(); ++it) {
+            if (it->second == rs1 && it->first != pc) {
+                int producer_cycle = pc_to_cycle_map_[it->first];
+                string prod_disasm = "";
+                string cons_disasm = "";
+                
+                for (const auto& snapshot : pipeline_trace_) {
+                    if (snapshot.mem_wb.pc == it->first) {
+                        prod_disasm = snapshot.mem_wb.disassembly;
+                    }
+                    if (snapshot.id_ex.pc == pc) {
+                        cons_disasm = snapshot.id_ex.disassembly;
+                    }
+                }
+                
+                instruction_dependencies_.push_back(
+                    InstructionDependency(it->first, pc, rs1, "RAW", producer_cycle, cycle, prod_disasm, cons_disasm)
+                );
+            }
+        }
+    }
+    
+    if (rs2 != 0) {
+        for (auto it = pc_to_rd_map_.begin(); it != pc_to_rd_map_.end(); ++it) {
+            if (it->second == rs2 && it->first != pc) {
+                int producer_cycle = pc_to_cycle_map_[it->first];
+                string prod_disasm = "";
+                string cons_disasm = "";
+                
+                for (const auto& snapshot : pipeline_trace_) {
+                    if (snapshot.mem_wb.pc == it->first) {
+                        prod_disasm = snapshot.mem_wb.disassembly;
+                    }
+                    if (snapshot.id_ex.pc == pc) {
+                        cons_disasm = snapshot.id_ex.disassembly;
+                    }
+                }
+                
+                instruction_dependencies_.push_back(
+                    InstructionDependency(it->first, pc, rs2, "RAW", producer_cycle, cycle, prod_disasm, cons_disasm)
+                );
+            }
+        }
+    }
 }
