@@ -1,5 +1,28 @@
+# Build directories
+build/
+cmake-build-*/
+*.pro.user
+*.pro.user.*
+
+# Qt generated files
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+*.moc
+
+# Executables
+cpusim_gui
+cpusim_gui.app
+
+# IDE files
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
 .DS_Store
-cpusim
+Thumbs.db
+
 pipeline.log
-PIPELINE_README.md
