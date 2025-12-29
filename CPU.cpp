@@ -1,6 +1,7 @@
 // file: CPU.cpp
 
 #include "CPU.h"
+#include "Cache.h"
 #include <iomanip>
 #include <iostream>
 
@@ -19,7 +20,13 @@ CPU::CPU()
     pipeline_flush = false;
     maxPC = 0;
     enable_logging = false;
+    enable_tracing_ = false;
     dmem_ = NULL;
+
+    // Initialize tracking structures
+    for (int i = 0; i < 32; i++) {
+        previous_register_values_[i] = 0;
+    }
 
     // dmem_ will be set by main(); we keep nullptr check in load/store
 }
@@ -29,6 +36,45 @@ CPU::~CPU()
 	if (log_file.is_open()) {
 		log_file.close();
 	}
+}
+
+void CPU::reset() {
+    PC = 0;
+    
+    // Reset all registers
+    for (int i = 0; i < 32; i++) {
+        registers[i] = 0;
+        previous_register_values_[i] = 0;
+    }
+    
+    // Reset pipeline control
+    pipeline_stall = false;
+    pipeline_flush = false;
+    maxPC = 0;
+    
+    // Reset pipeline registers
+    if_id = IF_ID_Register();
+    id_ex = ID_EX_Register();
+    ex_mem = EX_MEM_Register();
+    mem_wb = MEM_WB_Register();
+    ex_mem_prev = EX_MEM_Register();
+    mem_wb_prev = MEM_WB_Register();
+    
+    // Clear traces and statistics
+    clear_trace();
+    clear_memory_history();
+    clear_register_history();
+    clear_dependencies();
+    
+    // Reset statistics
+    stats_ = CPUStatistics();
+    
+    // Reset maps
+    pc_to_cycle_map_.clear();
+    pc_to_rd_map_.clear();
+    
+    // Note: dmem_ is preserved (set externally)
+    // Note: enable_tracing_ is preserved
 }
 
 
@@ -265,8 +311,10 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
 
             if (*funct3 == 0x0) // BEQ
                 *aluOp = 0x30;
-            else if (*funct3 == 0x2) // BNE
+            else if (*funct3 == 0x1) // BNE
                 *aluOp = 0x35;
+            else if (*funct3 == 0x2) // Reserved, but treat as BEQ for compatibility
+                *aluOp = 0x30;
             else if (*funct3 == 0x4) // BLT
                 *aluOp = 0x33;
             else if (*funct3 == 0x5) // BGE
@@ -334,7 +382,7 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
 }
 
 // generates immediate for the given instruction
-int32_t CPU::generate_immediate(uint32_t instruction, int opcode) {
+int32_t CPU::generate_immediate(uint32_t instruction, int opcode) const {
     int32_t imm = 0;
     
     switch(opcode) {
@@ -394,7 +442,7 @@ int32_t CPU::generate_immediate(uint32_t instruction, int opcode) {
 }
 
 // Sign extension helper
-int32_t CPU::sign_extend(int32_t value, int bits) {
+int32_t CPU::sign_extend(int32_t value, int bits) const {
     int32_t sign_bit = (value >> (bits - 1)) & 1;
     if (sign_bit) {
         value |= (~0U << bits);
@@ -581,6 +629,18 @@ void CPU::instruction_decode(bool debug) {
         return;
     }
 
+    // Track instruction type statistics
+    stats_.total_instructions++;
+    switch (opcode) {
+        case 0x33: stats_.r_type_count++; break;
+        case 0x13: stats_.i_type_count++; break;
+        case 0x03: stats_.load_count++; break;
+        case 0x23: stats_.store_count++; break;
+        case 0x63: stats_.branch_count++; break;
+        case 0x67: case 0x6F: stats_.jump_count++; break;
+        case 0x37: case 0x17: stats_.lui_auipc_count++; break;
+    }
+
     // Read register values
     int32_t rs1_data = (rs1 != 0) ? get_register_value(rs1) : 0;
     int32_t rs2_data = (rs2 != 0) ? get_register_value(rs2) : 0;
@@ -608,6 +668,11 @@ void CPU::instruction_decode(bool debug) {
     id_ex.immediate = immediate;
     id_ex.pc = if_id.pc;
     id_ex.valid = true;
+
+    // Track instruction dependencies
+    if (enable_tracing_) {
+        track_instruction_dependencies(stats_.total_cycles, if_id.pc, rd, rs1, rs2);
+    }
 
     if (debug) {
         std::cout << "ID: Decoded instruction - " << disassemble_instruction(if_id.instruction) << std::endl;
@@ -676,11 +741,18 @@ void CPU::execute_stage(bool debug) {
         ex_mem.pc         = id_ex.pc;
         ex_mem.valid      = true;
 
-        PC = id_ex.pc + id_ex.immediate;
+        uint32_t target_pc = id_ex.pc + id_ex.immediate;
+        PC = target_pc;
         pipeline_flush = true;
-        if (debug) { 
-            std::cout << "EX: JAL taken to " << PC << ", link=" << (id_ex.pc+4) 
-                      << ", immediate=" << id_ex.immediate << std::endl; 
+        if (debug || enable_logging) { 
+            std::cout << "EX: JAL at PC=0x" << std::hex << id_ex.pc 
+                      << " immediate=" << std::dec << id_ex.immediate
+                      << " target=0x" << std::hex << target_pc << std::dec << std::endl;
+            if (enable_logging && log_file.is_open()) {
+                log_file << "EX: JAL at PC=0x" << std::hex << id_ex.pc 
+                         << " immediate=" << std::dec << id_ex.immediate
+                         << " target=0x" << std::hex << target_pc << std::dec << std::endl;
+            }
         }
         return;
     }
@@ -728,11 +800,19 @@ void CPU::execute_stage(bool debug) {
             // immediate already byte-scaled in generate_immediate()
             PC = id_ex.pc + id_ex.immediate;
             pipeline_flush = true;
+            stats_.branch_taken_count++;
 
             if (debug) {
                 std::cout << "EX: Branch taken. Flushing pipeline." << std::endl;
             }
+        } else {
+            stats_.branch_not_taken_count++;
         }
+    }
+    
+    // Track jumps
+    if (id_ex.opcode == 0x6F || id_ex.opcode == 0x67) {
+        stats_.branch_taken_count++; // Jumps are always taken
     }
 
     // Forward rs2_data for store operations
@@ -793,14 +873,52 @@ void CPU::memory_stage(bool debug) {
     
     // Memory operations
     if (ex_mem.memRe) {
-        // Load operation
+        // Load operation - track cache stats before access
+        uint64_t hits_before = 0, misses_before = 0;
+        bool had_cache = get_cache_stats(hits_before, misses_before);
+        
         mem_data = read_memory(ex_mem.alu_result, ex_mem.memReadType);
+        stats_.memory_reads++;
+        
+        // Check if this was a cache hit or miss
+        bool cache_hit = false;
+        if (had_cache) {
+            uint64_t hits_after = 0, misses_after = 0;
+            get_cache_stats(hits_after, misses_after);
+            // If hits increased, it was a hit; if misses increased, it was a miss
+            cache_hit = (hits_after > hits_before);
+        }
+        
+        // Track memory access
+        if (enable_tracing_) {
+            track_memory_access(stats_.total_cycles, ex_mem.alu_result, false, mem_data, ex_mem.pc, cache_hit);
+        }
+        
         if (debug) {
             std::cout << "MEM: Load from address " << ex_mem.alu_result << " = " << mem_data << std::endl;
         }
     } else if (ex_mem.memWr) {
-        // Store operation
+        // Store operation - track cache stats before access
+        uint64_t hits_before = 0, misses_before = 0;
+        bool had_cache = get_cache_stats(hits_before, misses_before);
+        
         write_memory(ex_mem.alu_result, ex_mem.rs2_data, ex_mem.memWriteType);
+        stats_.memory_writes++;
+        
+        // Check if this was a cache hit or miss
+        bool cache_hit = false;
+        if (had_cache) {
+            uint64_t hits_after = 0, misses_after = 0;
+            get_cache_stats(hits_after, misses_after);
+            // If hits increased, it was a hit; if misses increased, it was a miss
+            cache_hit = (hits_after > hits_before);
+        }
+        
+        // Track memory access
+        if (enable_tracing_) {
+            track_memory_access(stats_.total_cycles, ex_mem.alu_result, true, ex_mem.rs2_data, ex_mem.pc, cache_hit);
+        }
+        
         if (debug) {
             std::cout << "MEM: Store " << ex_mem.rs2_data << " to address " << ex_mem.alu_result << std::endl;
         }
@@ -826,11 +944,31 @@ void CPU::write_back_stage(bool debug) {
     
     if (mem_wb.regWrite && mem_wb.rd != 0) {
         int32_t write_data = mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result;
+        int32_t old_value = previous_register_values_[mem_wb.rd];
         registers[mem_wb.rd] = write_data;
+        stats_.instructions_retired++;
+        
+        // Track register change
+        if (enable_tracing_) {
+            track_register_change(stats_.total_cycles, mem_wb.rd, old_value, write_data, mem_wb.pc);
+            previous_register_values_[mem_wb.rd] = write_data;
+            
+            // Update dependency tracking maps
+            pc_to_cycle_map_[mem_wb.pc] = stats_.total_cycles;
+            pc_to_rd_map_[mem_wb.pc] = mem_wb.rd;
+        }
         
         if (debug) {
             std::cout << std::dec;
             std::cout << "WB: Write " << write_data << " to register " << REGISTER_NAMES[mem_wb.rd] << std::endl;
+        }
+    } else if (mem_wb.valid) {
+        // Count instructions that complete even if they don't write to registers
+        stats_.instructions_retired++;
+        
+        // Still track cycle for dependency analysis
+        if (enable_tracing_) {
+            pc_to_cycle_map_[mem_wb.pc] = stats_.total_cycles;
         }
     }
 }
@@ -838,6 +976,24 @@ void CPU::write_back_stage(bool debug) {
 void CPU::run_pipeline_cycle(char* instMem, int cycle, bool debug) {
     if (debug) {
         std::cout << "\n=== Cycle " << cycle << " ===" << std::endl;
+    }
+
+    // Update statistics
+    stats_.total_cycles = cycle;
+    
+    // Update cache statistics
+    uint64_t cache_hits, cache_misses;
+    if (get_cache_stats(cache_hits, cache_misses)) {
+        stats_.cache_hits = cache_hits;
+        stats_.cache_misses = cache_misses;
+    }
+    
+    // Track stalls and flushes (count cycles with stalls/flushes)
+    if (pipeline_stall) {
+        stats_.stall_count++;
+    }
+    if (pipeline_flush) {
+        stats_.flush_count++;
     }
 
     // Take snapshots so EX can see last cycle's values
@@ -849,6 +1005,11 @@ void CPU::run_pipeline_cycle(char* instMem, int cycle, bool debug) {
     execute_stage(debug);
     instruction_decode(debug);
     instruction_fetch(instMem, debug);
+
+    // Capture pipeline snapshot for GUI
+    if (enable_tracing_) {
+        capture_pipeline_snapshot(cycle);
+    }
 
     if (enable_logging) {
         log_pipeline_state(cycle);
@@ -863,12 +1024,21 @@ void CPU::run_pipeline_cycle(char* instMem, int cycle, bool debug) {
 
 
 void CPU::set_logging(bool enable, string log_filename) {
+    // Close existing log file if open
+    if (log_file.is_open()) {
+        log_file.close();
+    }
+    
     enable_logging = enable;
     if (enable && !log_filename.empty()) {
-        log_file.open(log_filename);
+        // Open in truncate mode to overwrite previous log
+        log_file.open(log_filename, std::ios::out | std::ios::trunc);
         if (log_file.is_open()) {
             log_file << "Pipeline Execution Log" << std::endl;
             log_file << "=====================" << std::endl;
+            log_file.flush();
+        } else {
+            std::cerr << "Failed to open log file: " << log_filename << std::endl;
         }
     }
 }
@@ -881,7 +1051,7 @@ void CPU::set_max_pc(int max_pc) {
     maxPC = max_pc;
 }
 
-string CPU::disassemble_instruction(uint32_t instruction) {
+string CPU::disassemble_instruction(uint32_t instruction) const {
     unsigned int opcode = instruction & 0x7F;
     unsigned int rd = (instruction >> 7) & 0x1F;
     unsigned int funct3 = (instruction >> 12) & 0x7;
@@ -943,10 +1113,12 @@ string CPU::disassemble_instruction(uint32_t instruction) {
             switch (funct3) {
                 case 0x0: op = "BEQ"; break;
                 case 0x1: op = "BNE"; break;
+                case 0x2: op = "BEQ"; break;  // Reserved encoding, treat as BEQ
                 case 0x4: op = "BLT"; break;
                 case 0x5: op = "BGE"; break;
                 case 0x6: op = "BLTU"; break;
                 case 0x7: op = "BGEU"; break;
+                default: op = "BRANCH"; break;
             }
             args = REGISTER_NAMES[rs1] + ", " + REGISTER_NAMES[rs2] + ", " + std::to_string(generate_immediate(instruction, opcode));
             break;
@@ -957,6 +1129,15 @@ string CPU::disassemble_instruction(uint32_t instruction) {
         case 0x17: // AUIPC
             op = "AUIPC";
             args = REGISTER_NAMES[rd] + ", " + std::to_string(generate_immediate(instruction, opcode));
+            break;
+        case 0x6F: // JAL
+            op = "JAL";
+            args = REGISTER_NAMES[rd] + ", " + std::to_string(generate_immediate(instruction, opcode));
+            break;
+        case 0x67: // JALR
+            op = "JALR";
+            args = REGISTER_NAMES[rd] + ", " + std::to_string(generate_immediate(instruction, opcode)) + "(" + REGISTER_NAMES[rs1] + ")";
+            break;
     }
     
     return op + " " + args;
@@ -966,11 +1147,13 @@ void CPU::log_pipeline_state(int cycle) {
     if (!log_file.is_open()) return;
     
     log_file << "\n=== Cycle " << cycle << " ===" << std::endl;
+    log_file << "Current PC: 0x" << std::hex << PC << std::dec << ", maxPC: " << maxPC << std::endl;
     
     // Log IF/ID register
     log_file << "IF/ID: ";
     if (if_id.valid) {
-        log_file << "PC=0x" << std::hex << if_id.pc << ", Inst=0x" << if_id.instruction << std::dec;
+        log_file << "PC=0x" << std::hex << if_id.pc << ", Inst=0x" << if_id.instruction 
+                 << " (" << disassemble_instruction(if_id.instruction) << ")" << std::dec;
     } else {
         log_file << "Empty";
     }
@@ -979,11 +1162,20 @@ void CPU::log_pipeline_state(int cycle) {
     // Log ID/EX register
     log_file << "ID/EX: ";
     if (id_ex.valid) {
+        string id_ex_disasm = "";
+        if (if_id.valid && if_id.pc == id_ex.pc) {
+            id_ex_disasm = disassemble_instruction(if_id.instruction);
+        }
         log_file << "PC=0x" << std::hex << id_ex.pc 
-                 << ", ALUOp=" << id_ex.aluOp
-                 << ", rs1_data=" << id_ex.rs1_data
+                 << " (" << id_ex_disasm << ")"
+                 << ", opcode=0x" << id_ex.opcode
+                 << ", ALUOp=0x" << id_ex.aluOp
+                 << ", rs1_data=" << std::dec << id_ex.rs1_data
                  << ", rs2_data=" << id_ex.rs2_data
-                 << ", imm=" << id_ex.immediate << std::dec;
+                 << ", imm=" << id_ex.immediate;
+        if (id_ex.opcode == 0x6F || id_ex.opcode == 0x67) {
+            log_file << " [JUMP instruction, target would be 0x" << std::hex << (id_ex.pc + id_ex.immediate) << std::dec << "]";
+        }
     } else {
         log_file << "Empty";
     }
@@ -993,9 +1185,9 @@ void CPU::log_pipeline_state(int cycle) {
     log_file << "EX/MEM: ";
     if (ex_mem.valid) {
         log_file << "PC=0x" << std::hex << ex_mem.pc 
-                 << ", ALU_result=" << ex_mem.alu_result
+                 << ", ALU_result=" << std::dec << ex_mem.alu_result
                  << ", rs2_data=" << ex_mem.rs2_data
-                 << ", rd=x" << std::dec << ex_mem.rd;
+                 << ", rd=x" << ex_mem.rd;
     } else {
         log_file << "Empty";
     }
@@ -1004,17 +1196,26 @@ void CPU::log_pipeline_state(int cycle) {
     // Log MEM/WB register
     log_file << "MEM/WB: ";
     if (mem_wb.valid) {
-        log_file << "PC=0x" << std::hex << mem_wb.pc << ", Write_data=" << (mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result) << std::dec;
+        log_file << "PC=0x" << std::hex << mem_wb.pc 
+                 << ", rd=x" << std::dec << mem_wb.rd
+                 << ", Write_data=" << (mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result);
     } else {
         log_file << "Empty";
     }
     log_file << std::endl;
 
-    log_file << ", rd=x" << std::dec << mem_wb.rd 
-         << ", write_data=" << (mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result);
-
     log_file << "Control: stall=" << (pipeline_stall ? "true" : "false") 
          << ", flush=" << (pipeline_flush ? "true" : "false") << std::endl;
+    log_file << "Pipeline empty: " << (is_pipeline_empty() ? "true" : "false") << std::endl;
+    
+    // Log JAL/JALR execution details if in EX/MEM
+    if (ex_mem.valid && (id_ex.opcode == 0x6F || id_ex.opcode == 0x67)) {
+        log_file << "JUMP: PC=0x" << std::hex << ex_mem.pc << ", immediate=" << std::dec << id_ex.immediate 
+                 << ", target=0x" << std::hex << (ex_mem.pc + id_ex.immediate) << std::dec << std::endl;
+    }
+    
+    // Flush to ensure data is written immediately
+    log_file.flush();
 
 }
 
@@ -1022,4 +1223,276 @@ void CPU::log_instruction_disassembly(uint32_t instruction, uint32_t pc) {
     if (!log_file.is_open()) return;
     
     log_file << "PC=0x" << std::hex << pc << ": " << disassemble_instruction(instruction) << std::dec << std::endl;
+}
+
+// Statistics and tracing implementation
+void CPU::capture_pipeline_snapshot(int cycle) {
+    if (!enable_tracing_) return;
+    
+    PipelineSnapshot snapshot;
+    snapshot.cycle = cycle;
+    snapshot.stall = pipeline_stall;
+    snapshot.flush = pipeline_flush;
+    
+    // Capture IF/ID stage
+    snapshot.if_id.valid = if_id.valid;
+    snapshot.if_id.pc = if_id.pc;
+    snapshot.if_id.instruction = if_id.instruction;
+    if (if_id.valid && if_id.instruction != 0) {
+        snapshot.if_id.disassembly = disassemble_instruction(if_id.instruction);
+    } else if (if_id.instruction != 0) {
+        // Even if not valid (flushed), still disassemble if we have the instruction
+        snapshot.if_id.disassembly = disassemble_instruction(if_id.instruction);
+    }
+    
+    // Capture ID/EX stage
+    snapshot.id_ex.valid = id_ex.valid;
+    snapshot.id_ex.pc = id_ex.pc;
+    if (id_ex.valid) {
+        snapshot.id_ex.disassembly = disassemble_instruction(if_id.instruction); // Use IF/ID instruction
+        // Extract opcode name
+        unsigned int opcode = id_ex.opcode;
+        switch (opcode) {
+            case 0x33: snapshot.id_ex.opcode_name = "R-type"; break;
+            case 0x13: snapshot.id_ex.opcode_name = "I-type"; break;
+            case 0x03: snapshot.id_ex.opcode_name = "Load"; break;
+            case 0x23: snapshot.id_ex.opcode_name = "Store"; break;
+            case 0x63: snapshot.id_ex.opcode_name = "Branch"; break;
+            case 0x67: case 0x6F: snapshot.id_ex.opcode_name = "Jump"; break;
+            case 0x37: case 0x17: snapshot.id_ex.opcode_name = "Upper-Imm"; break;
+            default: snapshot.id_ex.opcode_name = "Unknown"; break;
+        }
+    }
+    
+    // Capture EX/MEM stage
+    snapshot.ex_mem.valid = ex_mem.valid;
+    snapshot.ex_mem.pc = ex_mem.pc;
+    snapshot.ex_mem.alu_result = ex_mem.alu_result;
+    if (ex_mem.valid) {
+        // Look up instruction disassembly from pipeline trace history using PC
+        snapshot.ex_mem.disassembly = "";
+        for (auto it = pipeline_trace_.rbegin(); it != pipeline_trace_.rend() && it->cycle >= cycle - 10; ++it) {
+            if (it->id_ex.valid && it->id_ex.pc == ex_mem.pc) {
+                snapshot.ex_mem.disassembly = it->id_ex.disassembly;
+                break;
+            }
+            if (it->if_id.valid && it->if_id.pc == ex_mem.pc) {
+                snapshot.ex_mem.disassembly = it->if_id.disassembly;
+                break;
+            }
+        }
+        if (snapshot.ex_mem.disassembly.empty()) {
+        snapshot.ex_mem.disassembly = "EX/MEM";
+        }
+    }
+    
+    // Capture MEM/WB stage
+    snapshot.mem_wb.valid = mem_wb.valid;
+    snapshot.mem_wb.pc = mem_wb.pc;
+    snapshot.mem_wb.write_data = mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result;
+    if (mem_wb.valid) {
+        // Look up instruction disassembly from pipeline trace history using PC
+        snapshot.mem_wb.disassembly = "";
+        for (auto it = pipeline_trace_.rbegin(); it != pipeline_trace_.rend() && it->cycle >= cycle - 10; ++it) {
+            if (it->ex_mem.valid && it->ex_mem.pc == mem_wb.pc) {
+                snapshot.mem_wb.disassembly = it->ex_mem.disassembly;
+                break;
+            }
+            if (it->id_ex.valid && it->id_ex.pc == mem_wb.pc) {
+                snapshot.mem_wb.disassembly = it->id_ex.disassembly;
+                break;
+            }
+            if (it->if_id.valid && it->if_id.pc == mem_wb.pc) {
+                snapshot.mem_wb.disassembly = it->if_id.disassembly;
+                break;
+            }
+        }
+        if (snapshot.mem_wb.disassembly.empty()) {
+        snapshot.mem_wb.disassembly = "MEM/WB";
+        }
+    }
+    
+    pipeline_trace_.push_back(snapshot);
+}
+
+PipelineSnapshot CPU::get_current_pipeline_state(int cycle) const {
+    PipelineSnapshot snapshot;
+    snapshot.cycle = cycle;
+    snapshot.stall = pipeline_stall;
+    snapshot.flush = pipeline_flush;
+    
+    // Capture current IF/ID stage
+    snapshot.if_id.valid = if_id.valid;
+    snapshot.if_id.pc = if_id.pc;
+    snapshot.if_id.instruction = if_id.instruction;
+    if (if_id.valid) {
+        snapshot.if_id.disassembly = disassemble_instruction(if_id.instruction);
+    }
+    
+    // Capture current ID/EX stage
+    snapshot.id_ex.valid = id_ex.valid;
+    snapshot.id_ex.pc = id_ex.pc;
+    if (id_ex.valid) {
+        snapshot.id_ex.disassembly = disassemble_instruction(if_id.instruction);
+    }
+    
+    // Capture current EX/MEM stage
+    snapshot.ex_mem.valid = ex_mem.valid;
+    snapshot.ex_mem.pc = ex_mem.pc;
+    snapshot.ex_mem.alu_result = ex_mem.alu_result;
+    
+    // Capture current MEM/WB stage
+    snapshot.mem_wb.valid = mem_wb.valid;
+    snapshot.mem_wb.pc = mem_wb.pc;
+    snapshot.mem_wb.write_data = mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result;
+    
+    return snapshot;
+}
+
+bool CPU::get_cache_stats(uint64_t& hits, uint64_t& misses) const {
+    if (!dmem_) return false;
+    
+    // Try to cast to DirectMappedCache to get stats
+    // Note: This requires RTTI (Run-Time Type Information)
+    DirectMappedCache* cache = dynamic_cast<DirectMappedCache*>(dmem_);
+    if (cache) {
+        hits = cache->hits();
+        misses = cache->misses();
+        return true;
+    }
+    
+    return false;
+}
+
+// Memory address tracking implementation
+void CPU::track_memory_access(int cycle, uint32_t address, bool is_write, uint32_t value, uint32_t pc, bool cache_hit) {
+    if (!enable_tracing_) return;
+    
+    string disasm = "";
+    // Get disassembly from current pipeline state
+    if (ex_mem.valid && ex_mem.pc == pc) {
+        // Try to find disassembly from pipeline trace
+        for (auto it = pipeline_trace_.rbegin(); it != pipeline_trace_.rend() && it->cycle >= cycle - 5; ++it) {
+            if (it->ex_mem.valid && it->ex_mem.pc == pc) {
+                disasm = it->ex_mem.disassembly;
+                break;
+            }
+        }
+        if (disasm.empty()) {
+            // Fallback: try to disassemble from if_id if available
+            // For now, use a descriptive placeholder
+            disasm = is_write ? "STORE" : "LOAD";
+        }
+    }
+    
+    memory_access_history_.push_back(MemoryAccess(cycle, address, is_write, value, pc, disasm, cache_hit));
+}
+
+// Register value history tracking implementation
+void CPU::track_register_change(int cycle, unsigned int reg, int32_t old_value, int32_t new_value, uint32_t pc) {
+    if (!enable_tracing_) return;
+    if (reg == 0) return;  // Don't track x0 (zero register)
+    
+    string disasm = "";
+    // Get instruction disassembly
+    if (mem_wb.valid && mem_wb.pc == pc) {
+        // Try to find disassembly from pipeline trace
+        for (auto it = pipeline_trace_.rbegin(); it != pipeline_trace_.rend(); ++it) {
+            if (it->mem_wb.valid && it->mem_wb.pc == pc) {
+                disasm = it->mem_wb.disassembly;
+                break;
+            }
+        }
+        if (disasm.empty()) {
+            disasm = "REG_WRITE";
+        }
+    }
+    
+    register_history_.push_back(RegisterChange(cycle, reg, old_value, new_value, pc, disasm));
+}
+
+// Instruction dependency tracking implementation
+void CPU::track_instruction_dependencies(int cycle, uint32_t pc, unsigned int rd, unsigned int rs1, unsigned int rs2) {
+    if (!enable_tracing_) return;
+    
+    // Check for dependencies with previous instructions
+    // RAW (Read After Write): Current instruction reads a register that was written by a previous instruction
+    // Only track RAW dependencies (most relevant for pipeline hazards)
+    // Filter to only show dependencies within reasonable cycle distance (e.g., 10 cycles)
+    const int MAX_CYCLE_DISTANCE = 10;
+    
+    // Get consumer disassembly from current if_id
+    string cons_disasm = "";
+    if (if_id.valid && if_id.pc == pc) {
+        cons_disasm = disassemble_instruction(if_id.instruction);
+    }
+    
+    // Check for RAW dependencies (this instruction reads rs1 or rs2)
+    if (rs1 != 0) {
+        for (auto it = pc_to_rd_map_.begin(); it != pc_to_rd_map_.end(); ++it) {
+            if (it->second == rs1 && it->first != pc) {
+                int producer_cycle = pc_to_cycle_map_[it->first];
+                // Only track if within reasonable cycle distance
+                if (cycle - producer_cycle <= MAX_CYCLE_DISTANCE) {
+                    string prod_disasm = "";
+                    
+                    // Try to get producer disassembly from trace
+                    for (const auto& snapshot : pipeline_trace_) {
+                        if (snapshot.mem_wb.pc == it->first) {
+                            prod_disasm = snapshot.mem_wb.disassembly;
+                            break;
+                        }
+                    }
+                    // Fallback: try to disassemble if we can find the instruction
+                    if (prod_disasm.empty()) {
+                        // Look for instruction in any stage
+                        for (const auto& snapshot : pipeline_trace_) {
+                            if (snapshot.if_id.pc == it->first && snapshot.if_id.instruction != 0) {
+                                prod_disasm = snapshot.if_id.disassembly;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    instruction_dependencies_.push_back(
+                        InstructionDependency(it->first, pc, rs1, "RAW", producer_cycle, cycle, prod_disasm, cons_disasm)
+                    );
+                }
+            }
+        }
+    }
+    
+    if (rs2 != 0) {
+        for (auto it = pc_to_rd_map_.begin(); it != pc_to_rd_map_.end(); ++it) {
+            if (it->second == rs2 && it->first != pc) {
+                int producer_cycle = pc_to_cycle_map_[it->first];
+                // Only track if within reasonable cycle distance
+                if (cycle - producer_cycle <= MAX_CYCLE_DISTANCE) {
+                    string prod_disasm = "";
+                    
+                    // Try to get producer disassembly from trace
+                    for (const auto& snapshot : pipeline_trace_) {
+                        if (snapshot.mem_wb.pc == it->first) {
+                            prod_disasm = snapshot.mem_wb.disassembly;
+                            break;
+                        }
+                    }
+                    // Fallback: try to disassemble if we can find the instruction
+                    if (prod_disasm.empty()) {
+                        // Look for instruction in any stage
+                        for (const auto& snapshot : pipeline_trace_) {
+                            if (snapshot.if_id.pc == it->first && snapshot.if_id.instruction != 0) {
+                                prod_disasm = snapshot.if_id.disassembly;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    instruction_dependencies_.push_back(
+                        InstructionDependency(it->first, pc, rs2, "RAW", producer_cycle, cycle, prod_disasm, cons_disasm)
+                    );
+                }
+            }
+        }
+    }
 }

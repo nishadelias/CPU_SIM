@@ -1,172 +1,333 @@
 # RISC-V CPU Simulator
 
-A comprehensive, cycle-accurate RISC-V CPU simulator implemented in C++ that demonstrates fundamental computer architecture concepts. This project serves as both an educational tool for understanding CPU design and a practical implementation of the RISC-V instruction set architecture.
+A comprehensive, cycle-accurate RISC-V CPU simulator with a graphical user interface. This project simulates a 5-stage pipelined RISC-V processor, complete with cache memory, instruction execution, and detailed performance statistics. Perfect for learning computer architecture, understanding how CPUs work, and visualizing pipeline execution.
 
-## 🚀 Features
+## 📖 What is This Project?
 
-### **Implemented Instructions**
-- **R-type Instructions**: ADD, SUB, OR, XOR, AND, SLL, SRL, SRA, SLT, SLTU
-- **I-type Instructions**: ADDI, SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI
-- **Load/Store Instructions**: LW, SW, LB, LBU, LH, LHU, SB, SH
-- **Branch Instructions**: BEQ, BNE, BLT, BGE, BLTU, BGEU
-- **Jump Instructions**: JAL, JALR
-- **Upper Immediate**: LUI, AUIPC
+This project simulates a **RISC-V CPU** - a simplified but realistic processor that executes RISC-V assembly instructions. It includes:
 
-### **Architecture Components**
-- **5-stage Pipeline Simulation**: Fetch, Decode, Execute, Memory, Writeback
-- **32-bit RISC-V Architecture**: Full register file with 32 general-purpose registers
-- **Memory Hierarchy**: ✅ **Direct-mapped, write-through cache (configurable size/line) backed by main memory**
-- **ALU Operations**: Arithmetic, logical, shift, and comparison operations
-- **Control Unit**: Control signal generation for all instruction types
-- **Branch Handling**: Branches resolved in EX stage (no prediction)
-
-## 🛠️ Technical Implementation
-
-### **Key Design Decisions**
-- **Modular Architecture**: Separate ALU, CPU, Memory, and Cache classes
-- **Little-Endian Memory**: Proper byte ordering for RISC-V compatibility
-- **Sign Extension**: Correct handling of immediate values and memory loads
-- **Alignment Checking**: Hardware-enforced alignment for load/store
-- **Forwarding**: Basic data forwarding support in the pipeline
-
-### **Performance Optimizations**
-- **Efficient Instruction Decoding**: Bit-level manipulation for fast field extraction
-- **Single-Cycle ALU**: All arithmetic/logical operations complete in one cycle
-- **Cache Integration**: ✅ **Reduced average memory access latency via direct-mapped cache with hit/miss statistics**
-
-## 📁 Project Structure
-
-
-
-```
-CPU_SIM/
-├── CPU.cpp # Main CPU implementation
-├── CPU.h # CPU class definition
-├── ALU.cpp # Arithmetic Logic Unit
-├── ALU.h # ALU class definition
-├── Cache.h # ✅ Direct-mapped cache implementation (header-only)
-├── cpusim.cpp # Simulator entry point with cache integration
-├── MemoryIf.h # Memory interface abstraction
-├── assembly_translations/ # Human-readable assembly programs
-│ ├── r.txt # R-type tests
-│ ├── swr.txt # Store/Write/Read tests
-│ ├── jswr.txt # Jump/Store/Write/Read tests
-│ └── all.txt # Comprehensive test
-├── instruction_memory/ # Corresponding machine code
-│ ├── instMem-r.txt
-│ ├── instMem-swr.txt
-│ ├── instMem-jswr.txt
-│ └── instMem-all.txt
-└── README.md
-```
+- **5-Stage Pipeline**: Simulates how modern CPUs process instructions through Fetch, Decode, Execute, Memory, and Writeback stages
+- **Cache Memory System**: Direct-mapped cache with hit/miss tracking
+- **Full RISC-V Instruction Set**: Supports arithmetic, logical, memory, branch, and jump instructions
+- **Graphical Interface**: Visualize pipeline execution, register values, memory accesses, and statistics in real-time
+- **Command-Line Interface**: Run simulations from the terminal with detailed logging
 
 ## 🚀 Quick Start
 
-### **Compilation**
+### Prerequisites
+
+**For Command-Line Version:**
+- C++ compiler (g++ or clang++)
+- Make or CMake
+
+**For GUI Version:**
+- Qt6 (Core, Widgets, Charts modules)
+- CMake 3.16 or higher
+- C++17 compiler
+
+**Installing Qt6:**
+
+**macOS:**
 ```bash
-g++ *.cpp -o cpusim
+brew install qt6
+export PATH="/opt/homebrew/opt/qt6/bin:$PATH"  # Add to ~/.zshrc
 ```
 
-### **Running Test Programs**
+**Linux (Ubuntu/Debian):**
 ```bash
-# Basic R-type instruction test
-./cpusim instruction_memory/instMem-r.txt
+sudo apt-get update
+sudo apt-get install qt6-base-dev qt6-charts-dev cmake build-essential
+```
 
-# Store/Write/Read operations test
-./cpusim instruction_memory/instMem-swr.txt
+**Windows:**
+1. Download Qt6 from https://www.qt.io/download
+2. Install CMake from https://cmake.org/download/
+3. Add both to your PATH
 
-# Jump/Store/Write/Read operations test
-./cpusim instruction_memory/instMem-jswr.txt
+### Building the Project
 
-# Comprehensive instruction set test
+#### Option 1: Build GUI Version (Recommended)
+
+```bash
+# Create build directory
+mkdir build
+cd build
+
+# Configure with CMake
+cmake ..
+
+# Build
+cmake --build .
+
+# Run the GUI
+./cpusim_gui
+```
+
+#### Option 2: Build Command-Line Version
+
+```bash
+# Simple compilation
+g++ CPU.cpp ALU.cpp cpusim.cpp -o cpusim
+
+# Or using CMake (if you modify CMakeLists.txt)
+```
+
+## 🎮 How to Use
+
+### Using the GUI (Recommended for Beginners)
+
+1. **Launch the Application**
+   ```bash
+   cd build
+   ./cpusim_gui
+   ```
+
+2. **Load a Program**
+   - Click the **"Open Program"** button
+   - Navigate to the `instruction_memory/` directory
+   - Select a program file (e.g., `instMem-all.txt`)
+   - The filename will appear below the button
+
+3. **Control the Simulation**
+   - **Start**: Begin continuous execution at the selected speed
+   - **Pause**: Pause the simulation (can resume with Start)
+   - **Reset**: Reset the simulation to the beginning
+   - **Step**: Execute one pipeline cycle at a time
+   - **Speed Slider**: Adjust execution speed (1-100 cycles per second)
+
+4. **Explore the Interface**
+   The GUI is organized into tabs that you can view side-by-side:
+   
+   - **Statistics Tab**: 
+     - Performance metrics (CPI, cache hit rate, pipeline utilization)
+     - Instruction counts by type
+     - Cache statistics (hits, misses, hit rate)
+     - Instruction distribution pie chart
+   
+   - **Register File Tab**:
+     - Current values of all 32 RISC-V registers (x0-x31)
+     - ABI names (zero, ra, sp, gp, tp, t0-t6, s0-s11, a0-a7)
+     - Highlights recently changed registers
+   
+   - **Memory Access History Tab**:
+     - Timeline of all memory read/write operations
+     - Shows address, value, instruction, and cache hit/miss status
+     - Color-coded by operation type
+   
+   - **Instruction Dependencies Tab**:
+     - Shows RAW (Read After Write) dependencies between instructions
+     - Displays producer and consumer instructions with their PCs
+     - Helps understand data hazards in the pipeline
+   
+   - **Pipeline Execution Trace Tab**:
+     - Real-time view of instructions in each pipeline stage
+     - Shows PC address and instruction name (e.g., "PC 0x10: ADD")
+     - Displays stall and flush status
+     - Tracks instruction flow through IF, ID, EX, MEM, WB stages
+
+5. **Monitor Execution**
+   - Watch the pipeline trace update in real-time
+   - Observe register values change as instructions execute
+   - See memory accesses and cache behavior
+   - Check statistics to understand performance
+
+### Using the Command-Line Version
+
+```bash
+# Run a test program
 ./cpusim instruction_memory/instMem-all.txt
+
+# With debug output
+./cpusim instruction_memory/instMem-all.txt --debug
+
+# Save pipeline trace to log file
+./cpusim instruction_memory/instMem-all.txt --log pipeline.log
 ```
 
-### **Optional Command-Line Flags**
+The command-line version displays final register values after execution.
 
---debug : Print detailed pipeline stage debug output
---log <filename> : Save pipeline execution trace to a log file
+## 📁 Project Structure
 
-### **Expected Output**
-The simulator displays final register values after program execution:
 ```
-Register Values:
-Zero: 0
-ra: 0
-sp: 0
-...
-t0: 4096
-t1: 0
-t2: 512
-...
+CPU_SIM/
+├── CPU.cpp/h              # Main CPU implementation and pipeline
+├── ALU.cpp/h              # Arithmetic Logic Unit
+├── Cache.h                # Direct-mapped cache implementation
+├── MemoryIf.h             # Memory interface abstraction
+├── cpusim.cpp             # Command-line simulator entry point
+├── CMakeLists.txt         # Build configuration
+│
+├── gui/                   # GUI source files
+│   ├── main.cpp           # Application entry point
+│   ├── MainWindow.cpp/h   # Main window and UI layout
+│   ├── SimulatorController.cpp/h  # Simulation control logic
+│   ├── PipelineWidget.cpp/h       # Pipeline visualization
+│   ├── StatsWidget.cpp/h          # Statistics display
+│   ├── RegisterWidget.cpp/h       # Register file display
+│   ├── MemoryWidget.cpp/h         # Memory access display
+│   └── DependencyWidget.cpp/h    # Dependency visualization
+│
+├── instruction_memory/    # Machine code programs (hex format)
+│   ├── instMem-r.txt      # R-type instruction tests
+│   ├── instMem-swr.txt    # Store/Write/Read tests
+│   ├── instMem-jswr.txt   # Jump/Store/Write/Read tests
+│   └── instMem-all.txt    # Comprehensive test suite
+│
+├── assembly_translations/ # Human-readable assembly (for reference)
+│   ├── r.txt
+│   ├── swr.txt
+│   ├── jswr.txt
+│   └── all.txt
+│
+└── build/                 # Build directory (created during build)
+    └── cpusim_gui         # Executable (after building)
 ```
 
-## 🧪 Testing and Validation
+## 🎯 Features
 
-### **Test Programs**
-- **r.txt**: Tests basic R-type arithmetic and logical operations
-- **swr.txt**: Tests memory operations (load/store) with register operations
-- **jswr.txt**: Tests control flow (jumps/branches) with memory operations
-- **all.txt**: Complete instruction set validation
+### Implemented Instructions
 
-### **Cache System Verification**
-The cache system has been tested and verified with:
-- ✅ **Compilation**: Clean compilation with C++11 compatibility
-- ✅ **Execution**: All test programs run successfully with cache integration
-- ✅ **Memory Operations**: Load/store operations work correctly through cache
-- ✅ **Hit/Miss Tracking**: Cache statistics are properly maintained
-- ✅ **Write Policy**: Write-through with write-allocate policy functioning correctly
+- **R-type** (Register): ADD, SUB, OR, XOR, AND, SLL, SRL, SRA, SLT, SLTU
+- **I-type** (Immediate): ADDI, SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI
+- **Load/Store**: LW, SW, LB, LBU, LH, LHU, SB, SH
+- **Branch**: BEQ, BNE, BLT, BGE, BLTU, BGEU
+- **Jump**: JAL, JALR
+- **Upper Immediate**: LUI, AUIPC
 
-### **Verification**
-Each test program includes expected output values for verification. The comprehensive test validates:
-- Arithmetic operations (ADD, SUB, ADDI)
-- Logical operations (AND, OR, XOR, ANDI, ORI, XORI)
-- Shift operations (SLL, SRL, SRA, SLLI, SRLI, SRAI)
-- Comparison operations (SLT, SLTU, SLTI, SLTIU)
-- Memory operations (LW, SW, LB, SB, LH, SH)
-- Control flow (BEQ, BNE, JAL)
+### Architecture Components
 
+- **5-Stage Pipeline**: IF (Instruction Fetch), ID (Decode), EX (Execute), MEM (Memory), WB (Writeback)
+- **32-bit RISC-V Architecture**: Full 32-register file (x0-x31)
+- **Direct-Mapped Cache**: Configurable cache with write-through policy
+- **Memory Hierarchy**: Cache backed by main memory (4KB data memory)
+- **Pipeline Hazards**: Handles data hazards, control hazards, and structural hazards
+- **Statistics Tracking**: Comprehensive performance metrics and instruction counts
 
+### GUI Features
 
-## 🎯 Educational Value
+- **Real-Time Visualization**: Watch instructions flow through the pipeline
+- **Tabbed Interface**: View multiple panels side-by-side
+- **Interactive Controls**: Start, pause, step, reset, and speed control
+- **Detailed Statistics**: CPI, cache hit rate, pipeline utilization, instruction distribution
+- **Memory Tracking**: See every memory access with cache hit/miss information
+- **Dependency Analysis**: Understand data dependencies between instructions
+- **Pipeline Trace**: Complete history of pipeline execution with PC and instruction names
 
-This project demonstrates:
-- **Computer Architecture Fundamentals**: Pipeline design, control signals, data paths
-- **RISC-V ISA Understanding**: Instruction encoding, addressing modes, memory model
-- **System Programming**: Memory management, byte ordering, alignment
-- **Software Engineering**: Modular design, testing strategies, documentation
+## 📊 Understanding the Output
 
-## 🔧 Technical Specifications
+### Statistics Explained
 
-- **Architecture**: 32-bit RISC-V RV32I base integer instruction set
-- **Memory**: 4KB data memory with byte-addressable access
-- **Registers**: 32 general-purpose registers (x0-x31)
+- **CPI (Cycles Per Instruction)**: Average number of cycles needed per instruction
+- **Cache Hit Rate**: Percentage of memory accesses that hit in the cache
+- **Pipeline Utilization**: Percentage of pipeline stages that are actively processing instructions
+- **Instruction Counts**: Breakdown by instruction type (R-type, I-type, Load, Store, Branch, Jump, etc.)
+
+### Pipeline Stages
+
+1. **IF (Instruction Fetch)**: Fetches instruction from instruction memory
+2. **ID (Decode)**: Decodes instruction, reads registers, generates control signals
+3. **EX (Execute)**: Performs ALU operations, calculates branch targets
+4. **MEM (Memory)**: Accesses data memory (load/store operations)
+5. **WB (Writeback)**: Writes results back to register file
+
+### Cache Behavior
+
+- **Cache Hit**: Data found in cache (fast access)
+- **Cache Miss**: Data not in cache, must fetch from main memory (slower)
+- **Write-Through**: All writes go to both cache and main memory
+- **Write-Allocate**: On cache miss, allocate cache line before write
+
+## 🧪 Test Programs
+
+The project includes several test programs:
+
+- **instMem-r.txt**: Tests basic R-type arithmetic and logical operations
+- **instMem-swr.txt**: Tests memory operations (load/store) with register operations
+- **instMem-jswr.txt**: Tests control flow (jumps/branches) with memory operations
+- **instMem-all.txt**: Comprehensive test covering all instruction types
+
+Each program has a corresponding assembly translation file in `assembly_translations/` for reference.
+
+## 🔧 Technical Details
+
+### Architecture Specifications
+
+- **ISA**: RISC-V RV32I (32-bit base integer instruction set)
 - **Endianness**: Little-endian byte ordering
-- **Pipeline**: 5-stage pipeline simulation (fetch, decode, execute, memory, writeback)
+- **Memory**: 4KB data memory, byte-addressable
+- **Registers**: 32 general-purpose registers (x0 always zero)
+- **Pipeline**: 5-stage pipeline with hazard detection
+- **Cache**: Direct-mapped, write-through, write-allocate
+
+### Design Decisions
+
+- **Modular Architecture**: Separate classes for CPU, ALU, Cache, Memory
+- **Cycle-Accurate Simulation**: Each pipeline cycle is simulated accurately
+- **Forwarding Support**: Basic data forwarding to reduce stalls
+- **Branch Resolution**: Branches resolved in EX stage (no branch prediction)
+- **Alignment Checking**: Hardware-enforced alignment for load/store operations
+
+## 📚 Learning Resources
+
+This simulator is excellent for learning:
+
+- **Computer Architecture**: How CPUs process instructions
+- **Pipeline Design**: Understanding instruction pipelining and hazards
+- **Memory Hierarchy**: Cache organization and behavior
+- **RISC-V ISA**: Instruction encoding and execution
+- **Performance Analysis**: Understanding CPI, cache hit rates, and pipeline efficiency
+
+## 🐛 Troubleshooting
+
+### GUI Won't Build
+
+- **Qt6 not found**: Make sure Qt6 is installed and in your PATH
+  - macOS: `brew install qt6`
+  - Verify: `qmake6 --version`
+- **CMake errors**: Ensure CMake >= 3.16
+  - Try: `cmake -DCMAKE_PREFIX_PATH=/path/to/qt6 ..`
+- **Compilation errors**: Check that all source files are present and Qt6 Charts is installed
+
+### GUI Won't Run
+
+- **Program won't load**: Make sure you're selecting files from `instruction_memory/` directory
+- **Simulation stuck**: Check the pipeline log file (`pipeline.log`) for details
+- **No updates**: Make sure you've clicked "Start" or "Step" to begin execution
+
+### Command-Line Issues
+
+- **Program not found**: Use relative paths from project root
+- **No output**: Try adding `--debug` flag to see detailed execution
+
+## 📝 Logging
+
+The simulator can generate detailed execution logs:
+
+- **GUI**: Automatically writes to `pipeline.log` in the project root
+- **Command-Line**: Use `--log <filename>` to specify log file
+- **Log Format**: Shows pipeline state, register values, memory accesses, and control signals for each cycle
 
 ## 🚀 Future Enhancements
 
-Potential improvements for advanced features:
-- **Pipelining**: Full 5-stage pipeline with hazard detection
-- **Cache Simulation**: Multi-level cache hierarchy (L2/L3 caches)
-- **Cache Policies**: Set-associative and fully-associative cache implementations
-- **Floating Point**: RV32F floating-point instruction support
-- **Interrupts**: Exception handling and interrupt processing
-- **Performance Analysis**: Cycle counting and performance metrics
-- **GUI Interface**: Visual pipeline and memory state display
+Potential improvements:
 
-## 📚 Learning Outcomes
-
-This project provides hands-on experience with:
-- **CPU Design**: Understanding of datapath and control unit design
-- **Instruction Set Architecture**: RISC-V specification implementation
-- **Computer Organization**: Memory hierarchy and addressing modes
-- **Digital Logic**: ALU design and control signal generation
-- **Software Testing**: Comprehensive test suite development
+- Multi-level cache hierarchy (L2/L3 caches)
+- Set-associative and fully-associative cache implementations
+- Branch prediction (static and dynamic)
+- Floating-point instruction support (RV32F)
+- Exception handling and interrupts
+- More advanced forwarding and hazard detection
+- Performance profiling tools
 
 ## 🤝 Contributing
 
-This project serves as an educational resource for computer architecture students and enthusiasts. Contributions that improve documentation, add new features, or enhance testing are welcome.
+This project serves as an educational resource. Contributions that improve:
+- Documentation and examples
+- New features and instructions
+- Bug fixes and performance improvements
+- Test programs and validation
+
+are welcome!
 
 ## 📄 License
 
@@ -175,3 +336,5 @@ This project is open source and available for educational use.
 ---
 
 **Built with passion for computer architecture and RISC-V technology** 🖥️⚡
+
+For detailed GUI build instructions, see `GUI_BUILD.md`.
