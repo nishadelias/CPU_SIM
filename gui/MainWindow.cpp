@@ -46,6 +46,15 @@ void MainWindow::setupUI() {
     btnOpen_ = new QPushButton("Open Program", fileGroup);
     fileLayout->addWidget(btnOpen_);
     
+    // Filename label (will be updated when file is opened)
+    QLabel* filenameLabel = new QLabel("No file loaded", fileGroup);
+    filenameLabel->setWordWrap(true);
+    filenameLabel->setStyleSheet("QLabel { color: gray; font-style: italic; }");
+    fileLayout->addWidget(filenameLabel);
+    
+    // Store reference to filename label
+    lblFilename_ = filenameLabel;
+    
     QGroupBox* controlGroup = new QGroupBox("Simulation Control", controlPanel_);
     QVBoxLayout* controlGroupLayout = new QVBoxLayout(controlGroup);
     
@@ -77,30 +86,31 @@ void MainWindow::setupUI() {
     controlLayout->addWidget(controlGroup);
     controlLayout->addStretch();
     
-    // Pipeline Widget
-    pipelineWidget_ = new PipelineWidget(leftSplitter_);
-    
     leftSplitter_->addWidget(controlPanel_);
-    leftSplitter_->addWidget(pipelineWidget_);
     leftSplitter_->setStretchFactor(0, 0);
-    leftSplitter_->setStretchFactor(1, 1);
     
-    // Right side: Stats and other visualizations
-    rightSplitter_ = new QSplitter(Qt::Vertical, mainSplitter_);
+    // Right side: Tab widget with all visualizations
+    tabWidget_ = new QTabWidget(mainSplitter_);
+    tabWidget_->setTabsClosable(false);
+    tabWidget_->setMovable(true);
     
-    statsWidget_ = new StatsWidget(rightSplitter_);
-    registerWidget_ = new RegisterWidget(rightSplitter_);
-    memoryWidget_ = new MemoryWidget(rightSplitter_);
-    dependencyWidget_ = new DependencyWidget(rightSplitter_);
+    // Create all widgets
+    pipelineWidget_ = new PipelineWidget(tabWidget_);
+    statsWidget_ = new StatsWidget(tabWidget_);
+    registerWidget_ = new RegisterWidget(tabWidget_);
+    memoryWidget_ = new MemoryWidget(tabWidget_);
+    dependencyWidget_ = new DependencyWidget(tabWidget_);
     
-    rightSplitter_->addWidget(statsWidget_);
-    rightSplitter_->addWidget(registerWidget_);
-    rightSplitter_->addWidget(memoryWidget_);
-    rightSplitter_->addWidget(dependencyWidget_);
+    // Add all widgets as tabs
+    tabWidget_->addTab(pipelineWidget_, "Pipeline Execution Trace");
+    tabWidget_->addTab(statsWidget_, "Statistics");
+    tabWidget_->addTab(registerWidget_, "Register File");
+    tabWidget_->addTab(memoryWidget_, "Memory Access History");
+    tabWidget_->addTab(dependencyWidget_, "Instruction Dependencies");
     
     mainSplitter_->addWidget(leftSplitter_);
-    mainSplitter_->addWidget(rightSplitter_);
-    mainSplitter_->setStretchFactor(0, 2);
+    mainSplitter_->addWidget(tabWidget_);
+    mainSplitter_->setStretchFactor(0, 0);
     mainSplitter_->setStretchFactor(1, 1);
 }
 
@@ -166,9 +176,10 @@ void MainWindow::connectSignals() {
 
 void MainWindow::updateUI() {
     bool running = controller_->isRunning();
-    btnStart_->setEnabled(!running);
+    bool finished = (lblStatus_->text() == "Finished");
+    btnStart_->setEnabled(!running && !finished && !currentFilename_.isEmpty());
     btnPause_->setEnabled(running);
-    btnStep_->setEnabled(!running);
+    btnStep_->setEnabled(!running && !finished);
 }
 
 void MainWindow::openFile() {
@@ -181,7 +192,12 @@ void MainWindow::openFile() {
     
     if (!filename.isEmpty()) {
         if (controller_->loadProgram(filename)) {
-            lblStatus_->setText("Program loaded: " + QFileInfo(filename).fileName());
+            currentFilename_ = filename;
+            QString fileName = QFileInfo(filename).fileName();
+            lblFilename_->setText(fileName);
+            lblFilename_->setStyleSheet("QLabel { color: black; font-style: normal; }");
+            setWindowTitle("RISC-V CPU Simulator GUI - " + fileName);
+            lblStatus_->setText("Ready");
             resetSimulation();
         } else {
             QMessageBox::warning(this, "Error", "Failed to load program file.");
@@ -233,6 +249,8 @@ void MainWindow::onCycleCompleted(int cycle) {
 void MainWindow::onSimulationFinished() {
     lblStatus_->setText("Finished");
     updateUI();
+    // Disable step button when finished
+    btnStep_->setEnabled(false);
 }
 
 void MainWindow::onSpeedChanged(int value) {

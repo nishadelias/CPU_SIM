@@ -13,6 +13,7 @@ qrc_*.cpp
 # Executables
 cpusim_gui
 cpusim_gui.app
+cpusim
 
 # IDE files
 .vscode/

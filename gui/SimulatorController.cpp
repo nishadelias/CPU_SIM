@@ -3,6 +3,7 @@
 #include <QTextStream>
 #include <QDebug>
 #include <QFileInfo>
+#include <QDir>
 #include <cstring>
 #include <memory>
 #include "MemoryIf.h"
@@ -61,6 +62,18 @@ bool SimulatorController::loadProgram(const QString& filename) {
     maxPC_ = i / 2;
     cpu_.set_max_pc(maxPC_);
     
+    // Enable logging to pipeline.log in the project root directory
+    QFileInfo fileInfo(filename);
+    logFilePath_ = fileInfo.absolutePath() + "/pipeline.log";
+    // If loading from instruction_memory subdirectory, go up one level to project root
+    if (fileInfo.absolutePath().endsWith("instruction_memory")) {
+        QDir dir(fileInfo.absolutePath());
+        dir.cdUp();
+        logFilePath_ = dir.absoluteFilePath("pipeline.log");
+    }
+    qDebug() << "Logging to:" << logFilePath_;
+    cpu_.set_logging(true, logFilePath_.toStdString());
+    
     // Reset CPU
     resetSimulation();
     
@@ -87,11 +100,20 @@ void SimulatorController::pauseSimulation() {
 void SimulatorController::resetSimulation() {
     pauseSimulation();
     
+    // Reset memory hierarchy (cache) to ensure consistent stats
+    initializeMemoryHierarchy();
+    
     // Reset CPU state using reset method (avoids copy assignment issues)
     cpu_.reset();
     cpu_.enable_tracing(true);
     cpu_.set_data_memory(dcache_);  // Restore memory hierarchy
     cpu_.set_max_pc(maxPC_);
+    
+    // Re-enable logging after reset (reset closes the log file)
+    if (maxPC_ > 0 && !logFilePath_.isEmpty()) {
+        qDebug() << "Re-enabling logging to:" << logFilePath_;
+        cpu_.set_logging(true, logFilePath_.toStdString());
+    }
     
     currentCycle_ = 0;
 }
@@ -111,7 +133,8 @@ void SimulatorController::stepSimulation() {
     
     emit cycleCompleted(currentCycle_);
     
-    if (cpu_.is_pipeline_empty() && cpu_.readPC() >= maxPC_ - 4) {
+    // Check if program is finished: pipeline empty and PC beyond program end
+    if (cpu_.is_pipeline_empty() && cpu_.readPC() >= maxPC_) {
         emit simulationFinished();
     }
 }
@@ -131,9 +154,14 @@ void SimulatorController::onTimerTick() {
         return;
     }
     
-    stepSimulation();
+    // Run cycle directly (don't call stepSimulation which checks isRunning_)
+    currentCycle_++;
+    cpu_.run_pipeline_cycle(instructionMemory_, currentCycle_, false);
     
-    if (cpu_.is_pipeline_empty() && cpu_.readPC() >= maxPC_ - 4) {
+    emit cycleCompleted(currentCycle_);
+    
+    // Check if program is finished: pipeline empty and PC beyond program end
+    if (cpu_.is_pipeline_empty() && cpu_.readPC() >= maxPC_) {
         pauseSimulation();
         emit simulationFinished();
     }

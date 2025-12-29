@@ -13,6 +13,7 @@
 #include <QLabel>
 #include <QSlider>
 #include <QSpinBox>
+#include <QTabWidget>
 #include "SimulatorController.h"
 #include "PipelineWidget.h"
 #include "StatsWidget.h"
@@ -50,7 +51,7 @@ private:
     // UI Components
     QSplitter* mainSplitter_;
     QSplitter* leftSplitter_;
-    QSplitter* rightSplitter_;
+    QTabWidget* tabWidget_;
     
     // Control Panel
     QWidget* controlPanel_;
@@ -64,6 +65,8 @@ private:
     QSpinBox* speedSpinBox_;
     QLabel* lblCycle_;
     QLabel* lblStatus_;
+    QLabel* lblFilename_;
+    QString currentFilename_;
     
     // Visualization Widgets
     PipelineWidget* pipelineWidget_;

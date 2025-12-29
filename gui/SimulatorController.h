@@ -48,6 +48,7 @@ private:
     int cyclesPerSecond_;
     SimpleRAM* dram_;
     DirectMappedCache* dcache_;
+    QString logFilePath_;  // Store log file path
     static const int MAX_MEMORY_SIZE = 4096;
     static const int MAX_CYCLES = 10000;  // Prevent infinite loops
 

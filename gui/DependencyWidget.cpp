@@ -18,7 +18,7 @@ void DependencyWidget::setupUI() {
     
     dependencyTable_ = new QTableWidget(this);
     dependencyTable_->setColumnCount(6);
-    dependencyTable_->setHorizontalHeaderLabels({"Type", "Register", "Producer PC", "Consumer PC", "Producer", "Consumer"});
+    dependencyTable_->setHorizontalHeaderLabels({"Type", "Register", "Producer", "Consumer", "Producer Inst", "Consumer Inst"});
     dependencyTable_->setAlternatingRowColors(true);
     dependencyTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     dependencyTable_->horizontalHeader()->setStretchLastSection(true);
@@ -61,20 +61,22 @@ void DependencyWidget::updateDependencyTable(CPU* cpu) {
         // Register
         dependencyTable_->setItem(row, 1, new QTableWidgetItem(QString("x%1").arg(dep.register_num)));
         
-        // Producer PC
-        dependencyTable_->setItem(row, 2, new QTableWidgetItem(QString("0x%1").arg(dep.producer_pc, 0, 16)));
-        
-        // Consumer PC
-        dependencyTable_->setItem(row, 3, new QTableWidgetItem(QString("0x%1").arg(dep.consumer_pc, 0, 16)));
-        
-        // Producer instruction
+        // Producer PC with instruction
         QString producer = QString::fromStdString(dep.producer_disassembly);
         if (producer.isEmpty()) producer = "N/A";
-        dependencyTable_->setItem(row, 4, new QTableWidgetItem(producer));
+        QString producerText = QString("0x%1: %2").arg(dep.producer_pc, 0, 16).arg(producer);
+        dependencyTable_->setItem(row, 2, new QTableWidgetItem(producerText));
         
-        // Consumer instruction
+        // Consumer PC with instruction
         QString consumer = QString::fromStdString(dep.consumer_disassembly);
         if (consumer.isEmpty()) consumer = "N/A";
+        QString consumerText = QString("0x%1: %2").arg(dep.consumer_pc, 0, 16).arg(consumer);
+        dependencyTable_->setItem(row, 3, new QTableWidgetItem(consumerText));
+        
+        // Producer instruction (for sorting/filtering)
+        dependencyTable_->setItem(row, 4, new QTableWidgetItem(producer));
+        
+        // Consumer instruction (for sorting/filtering)
         dependencyTable_->setItem(row, 5, new QTableWidgetItem(consumer));
     }
 }

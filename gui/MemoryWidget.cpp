@@ -18,8 +18,8 @@ void MemoryWidget::setupUI() {
     layout_->addWidget(titleLabel_);
     
     memoryTable_ = new QTableWidget(this);
-    memoryTable_->setColumnCount(5);
-    memoryTable_->setHorizontalHeaderLabels({"Cycle", "Address", "Type", "Value", "Instruction"});
+    memoryTable_->setColumnCount(6);
+    memoryTable_->setHorizontalHeaderLabels({"Cycle", "Address", "Type", "Value", "Cache", "Instruction"});
     memoryTable_->setAlternatingRowColors(true);
     memoryTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     memoryTable_->horizontalHeader()->setStretchLastSection(true);
@@ -27,6 +27,7 @@ void MemoryWidget::setupUI() {
     memoryTable_->setColumnWidth(1, 100);
     memoryTable_->setColumnWidth(2, 60);
     memoryTable_->setColumnWidth(3, 100);
+    memoryTable_->setColumnWidth(4, 60);
     
     layout_->addWidget(memoryTable_);
 }
@@ -63,12 +64,17 @@ void MemoryWidget::updateMemoryTable(CPU* cpu) {
         // Value
         memoryTable_->setItem(i, 3, new QTableWidgetItem(QString::number(access.value)));
         
+        // Cache hit/miss
+        QTableWidgetItem* cacheItem = new QTableWidgetItem(access.cache_hit ? "Hit" : "Miss");
+        cacheItem->setBackground(access.cache_hit ? QBrush(QColor(200, 255, 200)) : QBrush(QColor(255, 200, 200)));
+        memoryTable_->setItem(i, 4, cacheItem);
+        
         // Instruction
         QString instruction = QString::fromStdString(access.instruction_disassembly);
         if (instruction.isEmpty()) {
             instruction = access.is_write ? "STORE" : "LOAD";
         }
-        memoryTable_->setItem(i, 4, new QTableWidgetItem(instruction));
+        memoryTable_->setItem(i, 5, new QTableWidgetItem(instruction));
     }
     
     // Scroll to bottom

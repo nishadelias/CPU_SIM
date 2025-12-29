@@ -58,7 +58,7 @@ void PipelineWidget::updatePipelineTable(CPU* cpu) {
         
         // IF/ID
         QString ifIdText = snapshot.if_id.valid 
-            ? QString("PC: 0x%1\n%2")
+            ? QString("0x%1: %2")
                 .arg(snapshot.if_id.pc, 0, 16)
                 .arg(QString::fromStdString(snapshot.if_id.disassembly))
             : "Empty";
@@ -68,7 +68,7 @@ void PipelineWidget::updatePipelineTable(CPU* cpu) {
         
         // ID/EX
         QString idExText = snapshot.id_ex.valid
-            ? QString("PC: 0x%1\n%2")
+            ? QString("0x%1: %2")
                 .arg(snapshot.id_ex.pc, 0, 16)
                 .arg(QString::fromStdString(snapshot.id_ex.disassembly))
             : "Empty";
@@ -78,10 +78,9 @@ void PipelineWidget::updatePipelineTable(CPU* cpu) {
         
         // EX/MEM
         QString exMemText = snapshot.ex_mem.valid
-            ? QString("PC: 0x%1\n%2\nALU: %3")
+            ? QString("0x%1: %2")
                 .arg(snapshot.ex_mem.pc, 0, 16)
                 .arg(QString::fromStdString(snapshot.ex_mem.disassembly))
-                .arg(snapshot.ex_mem.alu_result)
             : "Empty";
         QTableWidgetItem* exMemItem = new QTableWidgetItem(exMemText);
         exMemItem->setBackground(snapshot.ex_mem.valid ? QBrush(QColor(200, 255, 200)) : QBrush(QColor(240, 240, 240)));
@@ -89,10 +88,9 @@ void PipelineWidget::updatePipelineTable(CPU* cpu) {
         
         // MEM/WB
         QString memWbText = snapshot.mem_wb.valid
-            ? QString("PC: 0x%1\n%2\nWrite: %3")
+            ? QString("0x%1: %2")
                 .arg(snapshot.mem_wb.pc, 0, 16)
                 .arg(QString::fromStdString(snapshot.mem_wb.disassembly))
-                .arg(snapshot.mem_wb.write_data)
             : "Empty";
         QTableWidgetItem* memWbItem = new QTableWidgetItem(memWbText);
         memWbItem->setBackground(snapshot.mem_wb.valid ? QBrush(QColor(200, 255, 200)) : QBrush(QColor(240, 240, 240)));

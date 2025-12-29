@@ -190,11 +190,15 @@ struct CPUStatistics {
     
     double getPipelineUtilization() const {
         if (total_cycles == 0) return 0.0;
-        // Ideal: 5 instructions per cycle (one per stage)
-        // Actual: instructions_retired / cycles
-        double ideal_throughput = 5.0;
-        double actual_throughput = static_cast<double>(instructions_retired) / static_cast<double>(total_cycles);
-        return (actual_throughput / ideal_throughput) * 100.0;
+        // Pipeline utilization: average number of stages with valid instructions
+        // Ideal: 5 stages always full = 5.0
+        // We approximate by: instructions_retired / cycles (since each instruction uses 5 cycles ideally)
+        // But we need to account for the fact that instructions take multiple cycles
+        // A better metric: (instructions_retired * 5) / (total_cycles * 5) = instructions_retired / total_cycles
+        // But this doesn't account for pipeline bubbles. Let's use a simpler metric:
+        // Utilization = (instructions_retired) / (total_cycles) * 100%
+        // This gives the percentage of cycles that retired an instruction
+        return (static_cast<double>(instructions_retired) / static_cast<double>(total_cycles)) * 100.0;
     }
 };
 
@@ -206,10 +210,11 @@ struct MemoryAccess {
     uint32_t value;
     uint32_t pc;  // PC of instruction that accessed memory
     string instruction_disassembly;
+    bool cache_hit;  // Whether this access was a cache hit
     
-    MemoryAccess() : cycle(0), address(0), is_write(false), value(0), pc(0) {}
-    MemoryAccess(int c, uint32_t addr, bool write, uint32_t val, uint32_t instruction_pc, const string& disasm)
-        : cycle(c), address(addr), is_write(write), value(val), pc(instruction_pc), instruction_disassembly(disasm) {}
+    MemoryAccess() : cycle(0), address(0), is_write(false), value(0), pc(0), cache_hit(false) {}
+    MemoryAccess(int c, uint32_t addr, bool write, uint32_t val, uint32_t instruction_pc, const string& disasm, bool hit = false)
+        : cycle(c), address(addr), is_write(write), value(val), pc(instruction_pc), instruction_disassembly(disasm), cache_hit(hit) {}
 };
 
 // Register value change record
@@ -302,7 +307,7 @@ private:
     void capture_pipeline_snapshot(int cycle);
     
     // Helper methods for tracking
-    void track_memory_access(int cycle, uint32_t address, bool is_write, uint32_t value, uint32_t pc);
+    void track_memory_access(int cycle, uint32_t address, bool is_write, uint32_t value, uint32_t pc, bool cache_hit = false);
     void track_register_change(int cycle, unsigned int reg, int32_t old_value, int32_t new_value, uint32_t pc);
     void track_instruction_dependencies(int cycle, uint32_t pc, unsigned int rd, unsigned int rs1, unsigned int rs2);
 
