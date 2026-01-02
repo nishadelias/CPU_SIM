@@ -67,6 +67,7 @@ void StatsWidget::updateStatisticsTable(CPU* cpu) {
         "Pipeline Flushes",
         "Branches Taken",
         "Branches Not Taken",
+        "Branch Mispredictions",
         "Total Cycles",
         "Instructions Retired",
         "Cache Hits",
@@ -88,6 +89,7 @@ void StatsWidget::updateStatisticsTable(CPU* cpu) {
         stats.flush_count,
         stats.branch_taken_count,
         stats.branch_not_taken_count,
+        stats.branch_mispredictions,
         stats.total_cycles,
         stats.instructions_retired,
         stats.cache_hits,
@@ -143,15 +145,51 @@ void StatsWidget::updatePerformanceMetrics(CPU* cpu) {
     double hitRate = stats.getCacheHitRate();
     double utilization = stats.getPipelineUtilization();
     
-    QString text = QString(
-        "<b>Performance Metrics:</b><br>"
-        "CPI: %1<br>"
-        "Cache Hit Rate: %2%<br>"
-        "Pipeline Utilization: %3%"
-    ).arg(cpi, 0, 'f', 2)
-     .arg(hitRate, 0, 'f', 2)
-     .arg(utilization, 0, 'f', 2);
-    
-    performanceLabel_->setText(text);
+    // Calculate branch predictor accuracy
+    double branchPredAccuracy = 0.0;
+    QString predictorInfo = "None";
+    if (cpu->get_branch_predictor()) {
+        const BranchPredictorScheme* predictor = cpu->get_branch_predictor();
+        branchPredAccuracy = predictor->getAccuracy();
+        predictorInfo = QString::fromStdString(predictor->getSchemeName());
+        
+        // Add detailed predictor stats
+        uint64_t correct = predictor->correct_predictions();
+        uint64_t incorrect = predictor->incorrect_predictions();
+        uint64_t total = predictor->total_predictions();
+        
+        QString text = QString(
+            "<b>Performance Metrics:</b><br>"
+            "CPI: %1<br>"
+            "Cache Hit Rate: %2%<br>"
+            "Pipeline Utilization: %3%<br><br>"
+            "<b>Branch Predictor:</b> %4<br>"
+            "Accuracy: %5%<br>"
+            "Correct Predictions: %6<br>"
+            "Incorrect Predictions: %7<br>"
+            "Total Predictions: %8"
+        ).arg(cpi, 0, 'f', 2)
+         .arg(hitRate, 0, 'f', 2)
+         .arg(utilization, 0, 'f', 2)
+         .arg(predictorInfo)
+         .arg(branchPredAccuracy, 0, 'f', 2)
+         .arg(correct)
+         .arg(incorrect)
+         .arg(total);
+        
+        performanceLabel_->setText(text);
+    } else {
+        QString text = QString(
+            "<b>Performance Metrics:</b><br>"
+            "CPI: %1<br>"
+            "Cache Hit Rate: %2%<br>"
+            "Pipeline Utilization: %3%<br><br>"
+            "<b>Branch Predictor:</b> None"
+        ).arg(cpi, 0, 'f', 2)
+         .arg(hitRate, 0, 'f', 2)
+         .arg(utilization, 0, 'f', 2);
+        
+        performanceLabel_->setText(text);
+    }
 }
 

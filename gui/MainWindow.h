@@ -17,6 +17,7 @@
 #include <QComboBox>
 #include "SimulatorController.h"
 #include "CacheScheme.h"
+#include "BranchPredictorScheme.h"
 #include "PipelineWidget.h"
 #include "StatsWidget.h"
 #include "RegisterWidget.h"
@@ -40,6 +41,7 @@ private slots:
     void onSimulationFinished();
     void onSpeedChanged(int value);
     void onCacheSchemeChanged(int index);
+    void onBranchPredictorChanged(int index);
 
 private:
     void setupUI();
@@ -68,6 +70,8 @@ private:
     QSpinBox* speedSpinBox_;
     QLabel* lblCacheScheme_;
     QComboBox* cacheSchemeCombo_;
+    QLabel* lblBranchPredictor_;
+    QComboBox* branchPredictorCombo_;
     QLabel* lblCycle_;
     QLabel* lblStatus_;
     QLabel* lblFilename_;

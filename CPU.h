@@ -12,6 +12,7 @@
 #include "ALU.h"
 #include <cstdint>
 #include "MemoryIf.h"
+#include "BranchPredictorScheme.h"
 
 using namespace std;
 
@@ -169,13 +170,17 @@ struct CPUStatistics {
     uint64_t memory_reads;
     uint64_t memory_writes;
     
+    // Branch prediction statistics
+    uint64_t branch_mispredictions;
+    
     CPUStatistics() : total_instructions(0), r_type_count(0), i_type_count(0),
                      load_count(0), store_count(0), branch_count(0), jump_count(0),
                      lui_auipc_count(0), stall_count(0), flush_count(0),
                      branch_taken_count(0), branch_not_taken_count(0),
                      total_cycles(0), instructions_retired(0),
                      cache_hits(0), cache_misses(0),
-                     memory_reads(0), memory_writes(0) {}
+                     memory_reads(0), memory_writes(0),
+                     branch_mispredictions(0) {}
     
     double getCPI() const {
         if (instructions_retired == 0) return 0.0;
@@ -256,6 +261,7 @@ class CPU {
 private:
     // Removed old internal dmemory[]. Now we go through a pluggable interface:
     MemoryDevice* dmem_;    // data memory interface (can be a cache)
+    BranchPredictorScheme* branch_predictor_;  // branch predictor
 
     unsigned long PC; //pc 
     int32_t registers[32];
@@ -278,6 +284,11 @@ private:
     // Pipeline control
     bool pipeline_stall;
     bool pipeline_flush;
+    
+    // Branch prediction state
+    bool branch_predicted_taken_;  // Whether current branch in pipeline was predicted taken
+    uint32_t branch_predicted_target_;  // Predicted target address
+    uint32_t branch_pc_;  // PC of branch instruction being predicted
 
     // Program termination
     int maxPC;
@@ -304,7 +315,7 @@ private:
     map<uint32_t, unsigned int> pc_to_rd_map_;  // Map PC to destination register
     
     // Helper to capture pipeline snapshot
-    void capture_pipeline_snapshot(int cycle);
+    void capture_pipeline_snapshot(int cycle, bool had_stall, bool had_flush);
     
     // Helper methods for tracking
     void track_memory_access(int cycle, uint32_t address, bool is_write, uint32_t value, uint32_t pc, bool cache_hit = false);
@@ -320,7 +331,7 @@ private:
 
     // Helper methods
     string disassemble_instruction(uint32_t instruction) const;
-    void log_pipeline_state(int cycle);
+    void log_pipeline_state(int cycle, bool had_stall, bool had_flush);
     void log_instruction_disassembly(uint32_t instruction, uint32_t pc);
 
     int32_t generate_immediate(uint32_t instruction, int opcode) const;
@@ -354,6 +365,11 @@ public:
 
     // NEW: wire in the memory hierarchy from main()
     void set_data_memory(MemoryDevice* dev) { dmem_ = dev; }
+    
+    // Branch predictor management
+    void set_branch_predictor(BranchPredictorScheme* predictor) { branch_predictor_ = predictor; }
+    BranchPredictorScheme* get_branch_predictor() { return branch_predictor_; }
+    const BranchPredictorScheme* get_branch_predictor() const { return branch_predictor_; }
     
     // Statistics and tracing for GUI
     void enable_tracing(bool enable) { enable_tracing_ = enable; }

@@ -9,6 +9,7 @@
 #include "MemoryIf.h"
 #include "Cache.h"
 #include "CacheScheme.h"
+#include "BranchPredictor.h"
 
 SimulatorController::SimulatorController(QObject* parent)
     : QObject(parent)
@@ -28,7 +29,10 @@ SimulatorController::SimulatorController(QObject* parent)
     dram_ = nullptr;
     dcache_ = nullptr;
     currentCacheScheme_ = CacheSchemeType::DirectMapped;  // Default
+    branch_predictor_ = nullptr;
+    currentBranchPredictor_ = BranchPredictorType::AlwaysNotTaken;  // Default
     initializeMemoryHierarchy();
+    initializeBranchPredictor();
     cpu_.enable_tracing(true);
 }
 
@@ -36,6 +40,7 @@ SimulatorController::~SimulatorController() {
     cleanupMemory();
     if (dcache_) delete dcache_;
     if (dram_) delete dram_;
+    if (branch_predictor_) delete branch_predictor_;
 }
 
 bool SimulatorController::loadProgram(const QString& filename) {
@@ -106,10 +111,14 @@ void SimulatorController::resetSimulation() {
     // This will use the current cache scheme
     initializeMemoryHierarchy();
     
+    // Reset branch predictor
+    initializeBranchPredictor();
+    
     // Reset CPU state using reset method (avoids copy assignment issues)
     cpu_.reset();
     cpu_.enable_tracing(true);
     cpu_.set_data_memory(dcache_);  // Restore memory hierarchy
+    cpu_.set_branch_predictor(branch_predictor_);  // Restore branch predictor
     cpu_.set_max_pc(maxPC_);
     
     // Re-enable logging after reset (reset closes the log file)
@@ -206,5 +215,26 @@ void SimulatorController::setCacheScheme(CacheSchemeType scheme) {
         cpu_.set_data_memory(dcache_);
     }
     // Otherwise, will be reinitialized on next reset
+}
+
+void SimulatorController::setBranchPredictor(BranchPredictorType type) {
+    if (currentBranchPredictor_ == type && branch_predictor_ != nullptr) {
+        return;  // No change needed
+    }
+    
+    currentBranchPredictor_ = type;
+    
+    // Only reinitialize if not currently running
+    if (!isRunning_) {
+        initializeBranchPredictor();
+        cpu_.set_branch_predictor(branch_predictor_);
+    }
+    // Otherwise, will be reinitialized on next reset
+}
+
+void SimulatorController::initializeBranchPredictor() {
+    if (branch_predictor_) delete branch_predictor_;
+    branch_predictor_ = createBranchPredictor(currentBranchPredictor_);
+    cpu_.set_branch_predictor(branch_predictor_);
 }
 

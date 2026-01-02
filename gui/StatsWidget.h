@@ -8,6 +8,7 @@
 #include <QTableWidget>
 #include <QtCharts/QChartView>
 #include "CPU.h"
+#include "BranchPredictorScheme.h"
 
 QT_BEGIN_NAMESPACE
 class QPieSeries;

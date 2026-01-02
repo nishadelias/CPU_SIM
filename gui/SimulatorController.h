@@ -3,6 +3,7 @@
 
 #include "CPU.h"
 #include "CacheScheme.h"
+#include "BranchPredictorScheme.h"
 #include <QObject>
 #include <QTimer>
 #include <QString>
@@ -32,6 +33,10 @@ public:
     // Cache scheme management
     void setCacheScheme(CacheSchemeType scheme);
     CacheSchemeType getCacheScheme() const { return currentCacheScheme_; }
+    
+    // Branch predictor management
+    void setBranchPredictor(BranchPredictorType type);
+    BranchPredictorType getBranchPredictor() const { return currentBranchPredictor_; }
 
 signals:
     void cycleCompleted(int cycle);
@@ -53,6 +58,8 @@ private:
     SimpleRAM* dram_;
     CacheScheme* dcache_;
     CacheSchemeType currentCacheScheme_;
+    BranchPredictorScheme* branch_predictor_;
+    BranchPredictorType currentBranchPredictor_;
     QString logFilePath_;  // Store log file path
     static const int MAX_MEMORY_SIZE = 4096;
     static const int MAX_CYCLES = 10000;  // Prevent infinite loops
@@ -60,6 +67,7 @@ private:
     void initializeMemory();
     void cleanupMemory();
     void initializeMemoryHierarchy();
+    void initializeBranchPredictor();
 };
 
 #endif // SIMULATOR_CONTROLLER_H

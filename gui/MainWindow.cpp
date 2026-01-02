@@ -94,9 +94,24 @@ void MainWindow::setupUI() {
     cacheSchemeCombo_->addItem("8-Way Set Associative", static_cast<int>(CacheSchemeType::SetAssociative8Way));
     cacheSchemeCombo_->setCurrentIndex(0);  // Default to Direct Mapped
     cacheLayout->addRow(lblCacheScheme_, cacheSchemeCombo_);
+    
+    // Branch predictor selection
+    QGroupBox* predictorGroup = new QGroupBox("Branch Predictor Configuration", controlPanel_);
+    QFormLayout* predictorLayout = new QFormLayout(predictorGroup);
+    lblBranchPredictor_ = new QLabel("Branch Predictor:", predictorGroup);
+    branchPredictorCombo_ = new QComboBox(predictorGroup);
+    branchPredictorCombo_->addItem("Always Not Taken", static_cast<int>(BranchPredictorType::AlwaysNotTaken));
+    branchPredictorCombo_->addItem("Always Taken", static_cast<int>(BranchPredictorType::AlwaysTaken));
+    branchPredictorCombo_->addItem("Bimodal (2-bit)", static_cast<int>(BranchPredictorType::Bimodal));
+    branchPredictorCombo_->addItem("GShare", static_cast<int>(BranchPredictorType::GShare));
+    branchPredictorCombo_->addItem("Tournament", static_cast<int>(BranchPredictorType::Tournament));
+    branchPredictorCombo_->setCurrentIndex(0);  // Default to Always Not Taken
+    predictorLayout->addRow(lblBranchPredictor_, branchPredictorCombo_);
+    
     controlLayout->addWidget(fileGroup);
     controlLayout->addWidget(controlGroup);
     controlLayout->addWidget(cacheGroup);
+    controlLayout->addWidget(predictorGroup);
     controlLayout->addStretch();
     
     leftSplitter_->addWidget(controlPanel_);
@@ -177,6 +192,8 @@ void MainWindow::connectSignals() {
     // Cache scheme selection
     connect(cacheSchemeCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), 
             this, &MainWindow::onCacheSchemeChanged);
+    connect(branchPredictorCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), 
+            this, &MainWindow::onBranchPredictorChanged);
     
     // Controller signals
     connect(controller_, &SimulatorController::cycleCompleted, this, &MainWindow::onCycleCompleted);
@@ -240,6 +257,13 @@ void MainWindow::resetSimulation() {
         controller_->setCacheScheme(scheme);
     }
     
+    // Apply branch predictor selection before reset (in case it changed)
+    int predIndex = branchPredictorCombo_->currentIndex();
+    if (predIndex >= 0) {
+        BranchPredictorType predictor = static_cast<BranchPredictorType>(branchPredictorCombo_->itemData(predIndex).toInt());
+        controller_->setBranchPredictor(predictor);
+    }
+    
     controller_->resetSimulation();
     lblCycle_->setText("Cycle: 0");
     lblStatus_->setText("Ready");
@@ -290,5 +314,16 @@ void MainWindow::onCacheSchemeChanged(int index) {
     // If simulation is running, we should reset to apply the new cache scheme
     // But we'll let the user decide - just update the controller
     // The cache will be applied on next reset
+}
+
+void MainWindow::onBranchPredictorChanged(int index) {
+    if (index < 0) return;
+    
+    BranchPredictorType predictor = static_cast<BranchPredictorType>(branchPredictorCombo_->itemData(index).toInt());
+    controller_->setBranchPredictor(predictor);
+    
+    // If simulation is running, we should reset to apply the new branch predictor
+    // But we'll let the user decide - just update the controller
+    // The predictor will be applied on next reset
 }
 

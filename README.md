@@ -2,7 +2,9 @@
 
 A comprehensive, cycle-accurate RISC-V CPU simulator with a graphical user interface. This project simulates a 5-stage pipelined RISC-V processor, complete with cache memory, instruction execution, and detailed performance statistics. Perfect for learning computer architecture, understanding how CPUs work, and visualizing pipeline execution.
 
-**✨ Key Educational Feature**: The simulator includes an **extensible cache framework** that allows you to easily implement and test your own custom cache schemes! Compare built-in schemes (direct-mapped, fully associative, set-associative) or write your own to experiment with different replacement policies, write policies, and cache organizations.
+**✨ Key Educational Features**: The simulator includes **extensible frameworks** that allow you to easily implement and test your own custom components! 
+- **Cache Framework**: Compare built-in schemes (direct-mapped, fully associative, set-associative) or write your own to experiment with different replacement policies, write policies, and cache organizations.
+- **Branch Predictor Framework**: Compare built-in predictors (Always Not Taken, Bimodal, GShare, Tournament) or write your own to experiment with different prediction algorithms and accuracy improvements.
 
 ## 📖 What is This Project?
 
@@ -11,6 +13,8 @@ This project simulates a **RISC-V CPU** - a simplified but realistic processor t
 - **5-Stage Pipeline**: Simulates how modern CPUs process instructions through Fetch, Decode, Execute, Memory, and Writeback stages
 - **Multiple Cache Schemes**: Compare different cache organizations (Direct-mapped, Fully Associative, Set-Associative) with performance metrics
 - **Extensible Cache Framework**: **Easily add your own custom cache schemes!** The framework makes it simple to implement new cache replacement policies, write policies, or organizational structures for educational experiments
+- **Multiple Branch Predictors**: Compare different branch prediction algorithms (Always Not Taken, Always Taken, Bimodal, GShare, Tournament) with accuracy metrics
+- **Extensible Branch Predictor Framework**: **Easily add your own custom branch predictors!** The framework makes it simple to implement new prediction algorithms, history mechanisms, or hybrid approaches for educational experiments
 - **Full RISC-V Instruction Set**: Supports arithmetic, logical, memory, branch, and jump instructions
 - **Graphical Interface**: Visualize pipeline execution, register values, memory accesses, and statistics in real-time
 - **Command-Line Interface**: Run simulations from the terminal with detailed logging
@@ -47,9 +51,11 @@ sudo apt-get install qt6-base-dev qt6-charts-dev cmake build-essential
 2. Install CMake from https://cmake.org/download/
 3. Add both to your PATH
 
-## 🎓 Educational Focus: Custom Cache Schemes
+## 🎓 Educational Focus: Extensible Frameworks
 
-**One of the key educational features of this simulator is the extensible cache framework.** 
+**One of the key educational features of this simulator is the extensible frameworks for both caches and branch predictors.** 
+
+### Custom Cache Schemes
 
 You can easily implement and test your own cache schemes! The framework provides:
 - A simple interface (`CacheScheme`) that any cache implementation must follow
@@ -62,6 +68,20 @@ You can easily implement and test your own cache schemes! The framework provides
 - Cache design experiments
 - Understanding cache replacement policies (LRU, FIFO, Random, etc.)
 - Learning different write policies (write-through, write-back)
+
+### Custom Branch Predictors
+
+You can easily implement and test your own branch predictors! The framework provides:
+- A simple interface (`BranchPredictorScheme`) that any predictor implementation must follow
+- Built-in prediction statistics tracking (correct/incorrect predictions, accuracy)
+- Seamless integration with the GUI - your custom predictor will automatically appear in the dropdown
+- Examples of different prediction algorithms (Always Not Taken, Bimodal, GShare, Tournament) to learn from
+
+**Want to add your own branch predictor?** See the [BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md) guide for step-by-step instructions, code examples, and implementation guidelines. Perfect for:
+- Computer architecture courses
+- Branch prediction algorithm experiments
+- Understanding prediction mechanisms (saturating counters, history registers, hybrid approaches)
+- Learning how to improve prediction accuracy
 
 ### Building the Project
 
@@ -110,6 +130,17 @@ g++ CPU.cpp ALU.cpp cpusim.cpp -o cpusim
    - Default is Direct Mapped
    - The cache scheme is applied when you reset or start the simulation
 
+3. **Configure Branch Predictor** (Optional)
+   - In the "Branch Predictor Configuration" section, select your desired branch predictor
+   - Available options:
+     - **Always Not Taken**: Always predicts branches will not be taken
+     - **Always Taken**: Always predicts branches will be taken
+     - **Bimodal (2-bit)**: 2-bit saturating counter predictor
+     - **GShare**: Global history register predictor
+     - **Tournament**: Hybrid predictor combining Bimodal and GShare
+   - Default is Always Not Taken
+   - The branch predictor is applied when you reset or start the simulation
+
 3. **Load a Program**
    - Click the **"Open Program"** button
    - Navigate to the `instruction_memory/` directory
@@ -131,13 +162,22 @@ g++ CPU.cpp ALU.cpp cpusim.cpp -o cpusim
    - Run the same program again
    - Compare hit rates to understand cache performance differences
 
-6. **Explore the Interface**
+6. **Compare Branch Predictors**
+   - Run a program with one branch predictor
+   - Note the prediction accuracy in the Statistics tab (under Performance Metrics)
+   - Reset the simulation
+   - Change the branch predictor
+   - Run the same program again
+   - Compare accuracy rates to understand branch prediction performance differences
+
+7. **Explore the Interface**
    The GUI is organized into tabs that you can view side-by-side:
    
    - **Statistics Tab**: 
      - Performance metrics (CPI, cache hit rate, pipeline utilization)
      - Instruction counts by type
      - Cache statistics (hits, misses, hit rate)
+     - Branch predictor statistics (accuracy, correct/incorrect predictions)
      - Instruction distribution pie chart
    
    - **Register File Tab**:
@@ -161,7 +201,7 @@ g++ CPU.cpp ALU.cpp cpusim.cpp -o cpusim
      - Displays stall and flush status
      - Tracks instruction flow through IF, ID, EX, MEM, WB stages
 
-7. **Monitor Execution**
+8. **Monitor Execution**
    - Watch the pipeline trace update in real-time
    - Observe register values change as instructions execute
    - See memory accesses and cache behavior
@@ -190,10 +230,13 @@ CPU_SIM/
 ├── ALU.cpp/h              # Arithmetic Logic Unit
 ├── Cache.h                # Cache implementations (Direct-mapped, Fully Associative, Set-Associative)
 ├── CacheScheme.h          # Cache scheme framework and interface
+├── BranchPredictor.h      # Branch predictor implementations (Always Not Taken, Bimodal, GShare, Tournament)
+├── BranchPredictorScheme.h # Branch predictor framework and interface
 ├── MemoryIf.h             # Memory interface abstraction
 ├── cpusim.cpp             # Command-line simulator entry point
 ├── CMakeLists.txt         # Build configuration
 ├── CACHE_SCHEMES.md       # Detailed guide on cache schemes and adding custom ones
+├── BRANCH_PREDICTORS.md   # Detailed guide on branch predictors and adding custom ones
 │
 ├── gui/                   # GUI source files
 │   ├── main.cpp           # Application entry point
@@ -242,9 +285,16 @@ CPU_SIM/
   - 2-way, 4-way, and 8-way Set-Associative Caches (LRU replacement)
   - All caches use write-through and write-allocate policies
   - 4KB cache size with 32-byte cache lines (default)
+- **Multiple Branch Predictors**:
+  - Always Not Taken (baseline)
+  - Always Taken (baseline)
+  - Bimodal (2-bit saturating counter, 2048 entries)
+  - GShare (global history, 2048 entries, 12-bit history)
+  - Tournament (hybrid Bimodal + GShare, 2048 entries)
 - **Memory Hierarchy**: Cache backed by main memory (64KB RAM)
 - **Pipeline Hazards**: Handles data hazards, control hazards, and structural hazards
-- **Statistics Tracking**: Comprehensive performance metrics and instruction counts
+- **Branch Prediction**: Predicts branches in ID stage, resolves in EX stage, handles mispredictions
+- **Statistics Tracking**: Comprehensive performance metrics, instruction counts, cache statistics, and branch prediction accuracy
 
 ### GUI Features
 
@@ -252,6 +302,7 @@ CPU_SIM/
 - **Tabbed Interface**: View multiple panels side-by-side
 - **Interactive Controls**: Start, pause, step, reset, and speed control
 - **Detailed Statistics**: CPI, cache hit rate, pipeline utilization, instruction distribution
+- **Branch Predictor Metrics**: Prediction accuracy, correct/incorrect predictions, total predictions
 - **Memory Tracking**: See every memory access with cache hit/miss information
 - **Dependency Analysis**: Understand data dependencies between instructions
 - **Pipeline Trace**: Complete history of pipeline execution with PC and instruction names
@@ -263,6 +314,7 @@ CPU_SIM/
 - **CPI (Cycles Per Instruction)**: Average number of cycles needed per instruction
 - **Cache Hit Rate**: Percentage of memory accesses that hit in the cache
 - **Pipeline Utilization**: Percentage of pipeline stages that are actively processing instructions
+- **Branch Predictor Accuracy**: Percentage of branch predictions that were correct
 - **Instruction Counts**: Breakdown by instruction type (R-type, I-type, Load, Store, Branch, Jump, etc.)
 
 ### Pipeline Stages
@@ -286,6 +338,8 @@ CPU_SIM/
 - **Cache Line Size**: 32 bytes (one cache miss brings in 32 consecutive memory addresses)
 
 For detailed information about cache schemes and how to add custom ones, see [CACHE_SCHEMES.md](CACHE_SCHEMES.md).
+
+For detailed information about branch predictors and how to add custom ones, see [BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md).
 
 ## 🧪 Test Programs
 
@@ -311,13 +365,19 @@ Each program has a corresponding assembly translation file in `assembly_translat
   - Default: 4KB cache with 32-byte lines
   - Write-through and write-allocate policies
   - LRU replacement for associative caches
+- **Branch Prediction**: Selectable branch predictor (Always Not Taken, Always Taken, Bimodal, GShare, or Tournament)
+  - Default: Always Not Taken
+  - Predictions made in ID stage, resolved in EX stage
+  - Mispredictions cause pipeline flushes
 
 ### Design Decisions
 
 - **Modular Architecture**: Separate classes for CPU, ALU, Cache, Memory
 - **Cycle-Accurate Simulation**: Each pipeline cycle is simulated accurately
 - **Forwarding Support**: Basic data forwarding to reduce stalls
-- **Branch Resolution**: Branches resolved in EX stage (no branch prediction)
+- **Branch Prediction**: Branches predicted in ID stage, resolved in EX stage
+  - Multiple predictor algorithms available
+  - Mispredictions cause pipeline flushes and performance penalties
 - **Alignment Checking**: Hardware-enforced alignment for load/store operations
 
 ## 📚 Learning Resources
@@ -330,10 +390,16 @@ This simulator is excellent for learning:
   - Compare different cache schemes (direct-mapped vs. set-associative vs. fully associative)
   - Understand cache hit/miss behavior and replacement policies
   - See how cache organization affects performance
+- **Branch Prediction**: Prediction algorithms and accuracy
+  - Compare different branch predictors (Always Not Taken vs. Bimodal vs. GShare vs. Tournament)
+  - Understand prediction mechanisms (saturating counters, history registers, hybrid approaches)
+  - See how prediction accuracy affects pipeline performance
 - **RISC-V ISA**: Instruction encoding and execution
-- **Performance Analysis**: Understanding CPI, cache hit rates, and pipeline efficiency
+- **Performance Analysis**: Understanding CPI, cache hit rates, branch prediction accuracy, and pipeline efficiency
 
-For a detailed guide on cache schemes, see [CACHE_SCHEMES.md](CACHE_SCHEMES.md).
+For detailed guides, see:
+- [CACHE_SCHEMES.md](CACHE_SCHEMES.md) - Cache schemes framework
+- [BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md) - Branch predictors framework
 
 ## 🐛 Troubleshooting
 
@@ -372,13 +438,13 @@ Potential improvements:
 - Multi-level cache hierarchy (L2/L3 caches)
 - Additional cache replacement policies (FIFO, Random, etc.)
 - Write-back cache policies
-- Branch prediction (static and dynamic)
+- Additional branch predictor algorithms (Perceptron, Neural, TAGE, etc.)
 - Floating-point instruction support (RV32F)
 - Exception handling and interrupts
 - More advanced forwarding and hazard detection
 - Performance profiling tools
 
-Note: Multiple cache schemes (Direct-mapped, Fully Associative, Set-Associative) are already implemented! See [CACHE_SCHEMES.md](CACHE_SCHEMES.md) for details.
+Note: Multiple cache schemes (Direct-mapped, Fully Associative, Set-Associative) and branch predictors (Always Not Taken, Always Taken, Bimodal, GShare, Tournament) are already implemented! See [CACHE_SCHEMES.md](CACHE_SCHEMES.md) and [BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md) for details.
 
 ## 🤝 Contributing
 

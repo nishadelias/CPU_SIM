@@ -23,6 +23,10 @@ CPU::CPU()
     enable_logging = false;
     enable_tracing_ = false;
     dmem_ = NULL;
+    branch_predictor_ = NULL;
+    branch_predicted_taken_ = false;
+    branch_predicted_target_ = 0;
+    branch_pc_ = 0;
 
     // Initialize tracking structures
     for (int i = 0; i < 32; i++) {
@@ -52,6 +56,14 @@ void CPU::reset() {
     pipeline_stall = false;
     pipeline_flush = false;
     maxPC = 0;
+    branch_predicted_taken_ = false;
+    branch_predicted_target_ = 0;
+    branch_pc_ = 0;
+    
+    // Reset branch predictor if it exists
+    if (branch_predictor_) {
+        branch_predictor_->reset();
+    }
     
     // Reset pipeline registers
     if_id = IF_ID_Register();
@@ -649,6 +661,34 @@ void CPU::instruction_decode(bool debug) {
     // Generate immediate value
     int32_t immediate = generate_immediate(if_id.instruction, opcode);
 
+    // Branch prediction: predict in ID stage for branch instructions
+    if (branch && branch_predictor_ && (opcode == 0x63)) {  // Only predict conditional branches (not jumps)
+        uint32_t target = if_id.pc + immediate;
+        BranchPrediction pred = branch_predictor_->predict(if_id.pc, target);
+        
+        branch_predicted_taken_ = pred.predicted_taken;
+        branch_predicted_target_ = pred.predicted_target;
+        branch_pc_ = if_id.pc;
+        
+        // If predicted taken, update PC and flush IF/ID
+        if (pred.predicted_taken) {
+            PC = target;
+            pipeline_flush = true;  // Use pipeline_flush flag so IF stage can handle it properly
+            if (debug) {
+                std::cout << "ID: Branch predicted taken, PC -> 0x" << std::hex << target << std::dec << std::endl;
+            }
+        }
+    } else if (branch && (opcode == 0x67 || opcode == 0x6F)) {
+        // Jumps (JAL/JALR) are always taken - no prediction needed
+        branch_predicted_taken_ = true;
+        branch_predicted_target_ = if_id.pc + immediate;
+        branch_pc_ = if_id.pc;
+    } else {
+        branch_predicted_taken_ = false;
+        branch_predicted_target_ = 0;
+        branch_pc_ = 0;
+    }
+
     // Update ID/EX register
     id_ex.regWrite = regWrite;
     id_ex.aluSrc = aluSrc;
@@ -782,13 +822,64 @@ void CPU::execute_stage(bool debug) {
     // Branch decision
     if (id_ex.branch) {
         bool should_branch = false;
-        switch (id_ex.aluOp) {
-            case 0x30: should_branch = alu.isZero(); break; // BEQ
-            case 0x35: should_branch = !alu.isZero(); break; // BNE
-            case 0x31: should_branch = alu.isZero(); break;  // BGE
-            case 0x33: should_branch = alu.isZero(); break; // BLT
-            case 0x32: should_branch = alu.isZero(); break;  // BGEU
-            case 0x34: should_branch = alu.isZero(); break; // BLTU
+        uint32_t target = id_ex.pc + id_ex.immediate;
+        
+        // For conditional branches, determine if branch should be taken
+        if (id_ex.opcode == 0x63) {  // Conditional branch
+            switch (id_ex.aluOp) {
+                case 0x30: should_branch = alu.isZero(); break; // BEQ
+                case 0x35: should_branch = !alu.isZero(); break; // BNE
+                case 0x31: should_branch = alu.isZero(); break;  // BGE
+                case 0x33: should_branch = alu.isZero(); break; // BLT
+                case 0x32: should_branch = alu.isZero(); break;  // BGEU
+                case 0x34: should_branch = alu.isZero(); break; // BLTU
+            }
+            
+            // Update branch predictor with actual outcome
+            if (branch_predictor_) {
+                branch_predictor_->update(id_ex.pc, target, should_branch);
+            }
+            
+            // Check for misprediction
+            bool mispredicted = false;
+            if (should_branch != branch_predicted_taken_) {
+                mispredicted = true;
+                stats_.branch_mispredictions++;
+            } else if (should_branch && target != branch_predicted_target_) {
+                // Predicted taken but wrong target (shouldn't happen with our predictors, but check anyway)
+                mispredicted = true;
+                stats_.branch_mispredictions++;
+            }
+            
+            // Update branch statistics based on ACTUAL outcome (not prediction)
+            if (should_branch) {
+                stats_.branch_taken_count++;
+            } else {
+                stats_.branch_not_taken_count++;
+            }
+            
+            if (mispredicted) {
+                // Correct the PC
+                if (should_branch) {
+                    PC = target;
+                } else {
+                    PC = id_ex.pc + 4;  // Should have continued sequentially
+                }
+                pipeline_flush = true;
+                if (debug) {
+                    std::cout << "EX: Branch mispredicted! Correcting PC." << std::endl;
+                }
+            }
+            // If correctly predicted (taken or not taken), no flush needed in EX
+            // - If correctly predicted taken: flush already happened in ID stage
+            // - If correctly predicted not taken: no flush needed
+        } else if (id_ex.opcode == 0x6F || id_ex.opcode == 0x67) {
+            // Jumps (JAL/JALR) are always taken
+            // Note: Jumps are not conditional branches, so they don't affect branch prediction statistics
+            // They are tracked separately in jump_count
+            PC = target;
+            pipeline_flush = true;
+            // Don't increment branch_taken_count for jumps - they're not conditional branches
         }
 
         if (debug) {
@@ -796,24 +887,6 @@ void CPU::execute_stage(bool debug) {
                       << ", alu.isZero()=" << alu.isZero() 
                       << ", should_branch=" << should_branch << std::dec << std::endl;
         }
-
-        if (should_branch) {
-            // immediate already byte-scaled in generate_immediate()
-            PC = id_ex.pc + id_ex.immediate;
-            pipeline_flush = true;
-            stats_.branch_taken_count++;
-
-            if (debug) {
-                std::cout << "EX: Branch taken. Flushing pipeline." << std::endl;
-            }
-        } else {
-            stats_.branch_not_taken_count++;
-        }
-    }
-    
-    // Track jumps
-    if (id_ex.opcode == 0x6F || id_ex.opcode == 0x67) {
-        stats_.branch_taken_count++; // Jumps are always taken
     }
 
     // Forward rs2_data for store operations
@@ -988,32 +1061,54 @@ void CPU::run_pipeline_cycle(char* instMem, int cycle, bool debug) {
         stats_.cache_hits = cache_hits;
         stats_.cache_misses = cache_misses;
     }
-    
-    // Track stalls and flushes (count cycles with stalls/flushes)
-    if (pipeline_stall) {
-        stats_.stall_count++;
-    }
-    if (pipeline_flush) {
-        stats_.flush_count++;
-    }
 
     // Take snapshots so EX can see last cycle's values
     ex_mem_prev = ex_mem;
     mem_wb_prev = mem_wb;
 
+    // Track stalls and flushes - use flags to track if they occur during this cycle
+    bool cycle_had_stall = pipeline_stall;  // From previous cycle or already set
+    bool cycle_had_flush = pipeline_flush;  // From previous cycle or already set
+
     write_back_stage(debug);
     memory_stage(debug);
     execute_stage(debug);
+    
+    // Check for flush/stall after EX stage
+    if (pipeline_flush) cycle_had_flush = true;
+    if (pipeline_stall) cycle_had_stall = true;
+    
     instruction_decode(debug);
+    
+    // Check for flush/stall after ID stage (ID might set them)
+    if (pipeline_flush) cycle_had_flush = true;
+    if (pipeline_stall) cycle_had_stall = true;
+    
     instruction_fetch(instMem, debug);
+    
+    // Final check after all stages
+    if (pipeline_flush) cycle_had_flush = true;
+    if (pipeline_stall) cycle_had_stall = true;
+    
+    // Track stalls and flushes (count cycles with stalls/flushes)
+    if (cycle_had_stall) {
+        stats_.stall_count++;
+    }
+    if (cycle_had_flush) {
+        stats_.flush_count++;
+    }
+    
+    // Store for logging (so log shows the actual state during the cycle, not after)
+    bool log_stall = cycle_had_stall;
+    bool log_flush = cycle_had_flush;
 
     // Capture pipeline snapshot for GUI
     if (enable_tracing_) {
-        capture_pipeline_snapshot(cycle);
+        capture_pipeline_snapshot(cycle, log_stall, log_flush);
     }
 
     if (enable_logging) {
-        log_pipeline_state(cycle);
+        log_pipeline_state(cycle, log_stall, log_flush);
     }
 
     // Clear pipeline stall when the load instruction has moved past the EX stage
@@ -1144,7 +1239,7 @@ string CPU::disassemble_instruction(uint32_t instruction) const {
     return op + " " + args;
 }
 
-void CPU::log_pipeline_state(int cycle) {
+void CPU::log_pipeline_state(int cycle, bool had_stall, bool had_flush) {
     if (!log_file.is_open()) return;
     
     log_file << "\n=== Cycle " << cycle << " ===" << std::endl;
@@ -1205,8 +1300,8 @@ void CPU::log_pipeline_state(int cycle) {
     }
     log_file << std::endl;
 
-    log_file << "Control: stall=" << (pipeline_stall ? "true" : "false") 
-         << ", flush=" << (pipeline_flush ? "true" : "false") << std::endl;
+    log_file << "Control: stall=" << (had_stall ? "true" : "false") 
+         << ", flush=" << (had_flush ? "true" : "false") << std::endl;
     log_file << "Pipeline empty: " << (is_pipeline_empty() ? "true" : "false") << std::endl;
     
     // Log JAL/JALR execution details if in EX/MEM
@@ -1227,13 +1322,13 @@ void CPU::log_instruction_disassembly(uint32_t instruction, uint32_t pc) {
 }
 
 // Statistics and tracing implementation
-void CPU::capture_pipeline_snapshot(int cycle) {
+void CPU::capture_pipeline_snapshot(int cycle, bool had_stall, bool had_flush) {
     if (!enable_tracing_) return;
     
     PipelineSnapshot snapshot;
     snapshot.cycle = cycle;
-    snapshot.stall = pipeline_stall;
-    snapshot.flush = pipeline_flush;
+    snapshot.stall = had_stall;
+    snapshot.flush = had_flush;
     
     // Capture IF/ID stage
     snapshot.if_id.valid = if_id.valid;
