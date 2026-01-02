@@ -8,6 +8,7 @@
 #include <memory>
 #include "MemoryIf.h"
 #include "Cache.h"
+#include "CacheScheme.h"
 
 SimulatorController::SimulatorController(QObject* parent)
     : QObject(parent)
@@ -26,6 +27,7 @@ SimulatorController::SimulatorController(QObject* parent)
     // Initialize memory hierarchy
     dram_ = nullptr;
     dcache_ = nullptr;
+    currentCacheScheme_ = CacheSchemeType::DirectMapped;  // Default
     initializeMemoryHierarchy();
     cpu_.enable_tracing(true);
 }
@@ -101,6 +103,7 @@ void SimulatorController::resetSimulation() {
     pauseSimulation();
     
     // Reset memory hierarchy (cache) to ensure consistent stats
+    // This will use the current cache scheme
     initializeMemoryHierarchy();
     
     // Reset CPU state using reset method (avoids copy assignment issues)
@@ -186,7 +189,22 @@ void SimulatorController::initializeMemoryHierarchy() {
     if (dcache_) delete dcache_;
     
     dram_ = new SimpleRAM(64 * 1024);
-    dcache_ = new DirectMappedCache(dram_, 4*1024, 32);
+    dcache_ = createCacheScheme(currentCacheScheme_, dram_, 4*1024, 32);
     cpu_.set_data_memory(dcache_);
+}
+
+void SimulatorController::setCacheScheme(CacheSchemeType scheme) {
+    if (currentCacheScheme_ == scheme && dcache_ != nullptr) {
+        return;  // No change needed
+    }
+    
+    currentCacheScheme_ = scheme;
+    
+    // Only reinitialize if not currently running
+    if (!isRunning_) {
+        initializeMemoryHierarchy();
+        cpu_.set_data_memory(dcache_);
+    }
+    // Otherwise, will be reinitialized on next reset
 }
 

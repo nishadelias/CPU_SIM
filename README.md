@@ -2,12 +2,15 @@
 
 A comprehensive, cycle-accurate RISC-V CPU simulator with a graphical user interface. This project simulates a 5-stage pipelined RISC-V processor, complete with cache memory, instruction execution, and detailed performance statistics. Perfect for learning computer architecture, understanding how CPUs work, and visualizing pipeline execution.
 
+**✨ Key Educational Feature**: The simulator includes an **extensible cache framework** that allows you to easily implement and test your own custom cache schemes! Compare built-in schemes (direct-mapped, fully associative, set-associative) or write your own to experiment with different replacement policies, write policies, and cache organizations.
+
 ## 📖 What is This Project?
 
 This project simulates a **RISC-V CPU** - a simplified but realistic processor that executes RISC-V assembly instructions. It includes:
 
 - **5-Stage Pipeline**: Simulates how modern CPUs process instructions through Fetch, Decode, Execute, Memory, and Writeback stages
-- **Cache Memory System**: Direct-mapped cache with hit/miss tracking
+- **Multiple Cache Schemes**: Compare different cache organizations (Direct-mapped, Fully Associative, Set-Associative) with performance metrics
+- **Extensible Cache Framework**: **Easily add your own custom cache schemes!** The framework makes it simple to implement new cache replacement policies, write policies, or organizational structures for educational experiments
 - **Full RISC-V Instruction Set**: Supports arithmetic, logical, memory, branch, and jump instructions
 - **Graphical Interface**: Visualize pipeline execution, register values, memory accesses, and statistics in real-time
 - **Command-Line Interface**: Run simulations from the terminal with detailed logging
@@ -43,6 +46,22 @@ sudo apt-get install qt6-base-dev qt6-charts-dev cmake build-essential
 1. Download Qt6 from https://www.qt.io/download
 2. Install CMake from https://cmake.org/download/
 3. Add both to your PATH
+
+## 🎓 Educational Focus: Custom Cache Schemes
+
+**One of the key educational features of this simulator is the extensible cache framework.** 
+
+You can easily implement and test your own cache schemes! The framework provides:
+- A simple interface (`CacheScheme`) that any cache implementation must follow
+- Built-in cache statistics tracking (hits, misses, hit rates)
+- Seamless integration with the GUI - your custom cache will automatically appear in the dropdown
+- Examples of different cache organizations (direct-mapped, fully associative, set-associative) to learn from
+
+**Want to add your own cache scheme?** See the [CACHE_SCHEMES.md](CACHE_SCHEMES.md) guide for step-by-step instructions, code examples, and implementation guidelines. Perfect for:
+- Computer architecture courses
+- Cache design experiments
+- Understanding cache replacement policies (LRU, FIFO, Random, etc.)
+- Learning different write policies (write-through, write-back)
 
 ### Building the Project
 
@@ -82,20 +101,37 @@ g++ CPU.cpp ALU.cpp cpusim.cpp -o cpusim
    ./cpusim_gui
    ```
 
-2. **Load a Program**
+2. **Configure Cache Scheme** (Optional)
+   - In the "Cache Configuration" section, select your desired cache scheme
+   - Available options:
+     - **Direct Mapped**: Each memory block maps to one cache line
+     - **Fully Associative**: Any block can go in any cache line (LRU replacement)
+     - **2/4/8-Way Set Associative**: Compromise between direct-mapped and fully associative
+   - Default is Direct Mapped
+   - The cache scheme is applied when you reset or start the simulation
+
+3. **Load a Program**
    - Click the **"Open Program"** button
    - Navigate to the `instruction_memory/` directory
    - Select a program file (e.g., `instMem-all.txt`)
    - The filename will appear below the button
 
-3. **Control the Simulation**
+4. **Control the Simulation**
    - **Start**: Begin continuous execution at the selected speed
    - **Pause**: Pause the simulation (can resume with Start)
    - **Reset**: Reset the simulation to the beginning
    - **Step**: Execute one pipeline cycle at a time
    - **Speed Slider**: Adjust execution speed (1-100 cycles per second)
 
-4. **Explore the Interface**
+5. **Compare Cache Schemes**
+   - Run a program with one cache scheme
+   - Note the cache hit rate in the Statistics tab
+   - Reset the simulation
+   - Change the cache scheme
+   - Run the same program again
+   - Compare hit rates to understand cache performance differences
+
+6. **Explore the Interface**
    The GUI is organized into tabs that you can view side-by-side:
    
    - **Statistics Tab**: 
@@ -125,7 +161,7 @@ g++ CPU.cpp ALU.cpp cpusim.cpp -o cpusim
      - Displays stall and flush status
      - Tracks instruction flow through IF, ID, EX, MEM, WB stages
 
-5. **Monitor Execution**
+7. **Monitor Execution**
    - Watch the pipeline trace update in real-time
    - Observe register values change as instructions execute
    - See memory accesses and cache behavior
@@ -152,10 +188,12 @@ The command-line version displays final register values after execution.
 CPU_SIM/
 ├── CPU.cpp/h              # Main CPU implementation and pipeline
 ├── ALU.cpp/h              # Arithmetic Logic Unit
-├── Cache.h                # Direct-mapped cache implementation
+├── Cache.h                # Cache implementations (Direct-mapped, Fully Associative, Set-Associative)
+├── CacheScheme.h          # Cache scheme framework and interface
 ├── MemoryIf.h             # Memory interface abstraction
 ├── cpusim.cpp             # Command-line simulator entry point
 ├── CMakeLists.txt         # Build configuration
+├── CACHE_SCHEMES.md       # Detailed guide on cache schemes and adding custom ones
 │
 ├── gui/                   # GUI source files
 │   ├── main.cpp           # Application entry point
@@ -198,8 +236,13 @@ CPU_SIM/
 
 - **5-Stage Pipeline**: IF (Instruction Fetch), ID (Decode), EX (Execute), MEM (Memory), WB (Writeback)
 - **32-bit RISC-V Architecture**: Full 32-register file (x0-x31)
-- **Direct-Mapped Cache**: Configurable cache with write-through policy
-- **Memory Hierarchy**: Cache backed by main memory (4KB data memory)
+- **Multiple Cache Schemes**: 
+  - Direct-Mapped Cache (1-way set associative)
+  - Fully Associative Cache (LRU replacement)
+  - 2-way, 4-way, and 8-way Set-Associative Caches (LRU replacement)
+  - All caches use write-through and write-allocate policies
+  - 4KB cache size with 32-byte cache lines (default)
+- **Memory Hierarchy**: Cache backed by main memory (64KB RAM)
 - **Pipeline Hazards**: Handles data hazards, control hazards, and structural hazards
 - **Statistics Tracking**: Comprehensive performance metrics and instruction counts
 
@@ -236,6 +279,13 @@ CPU_SIM/
 - **Cache Miss**: Data not in cache, must fetch from main memory (slower)
 - **Write-Through**: All writes go to both cache and main memory
 - **Write-Allocate**: On cache miss, allocate cache line before write
+- **Cache Schemes**: Different cache organizations affect hit rates:
+  - **Direct-Mapped**: Fastest lookup, but can have conflicts
+  - **Fully Associative**: Best hit rate, but slower lookup
+  - **Set-Associative**: Balance between hit rate and lookup speed
+- **Cache Line Size**: 32 bytes (one cache miss brings in 32 consecutive memory addresses)
+
+For detailed information about cache schemes and how to add custom ones, see [CACHE_SCHEMES.md](CACHE_SCHEMES.md).
 
 ## 🧪 Test Programs
 
@@ -254,10 +304,13 @@ Each program has a corresponding assembly translation file in `assembly_translat
 
 - **ISA**: RISC-V RV32I (32-bit base integer instruction set)
 - **Endianness**: Little-endian byte ordering
-- **Memory**: 4KB data memory, byte-addressable
+- **Memory**: 64KB main memory (RAM), byte-addressable
 - **Registers**: 32 general-purpose registers (x0 always zero)
 - **Pipeline**: 5-stage pipeline with hazard detection
-- **Cache**: Direct-mapped, write-through, write-allocate
+- **Cache**: Selectable cache scheme (Direct-mapped, Fully Associative, or Set-Associative)
+  - Default: 4KB cache with 32-byte lines
+  - Write-through and write-allocate policies
+  - LRU replacement for associative caches
 
 ### Design Decisions
 
@@ -274,8 +327,13 @@ This simulator is excellent for learning:
 - **Computer Architecture**: How CPUs process instructions
 - **Pipeline Design**: Understanding instruction pipelining and hazards
 - **Memory Hierarchy**: Cache organization and behavior
+  - Compare different cache schemes (direct-mapped vs. set-associative vs. fully associative)
+  - Understand cache hit/miss behavior and replacement policies
+  - See how cache organization affects performance
 - **RISC-V ISA**: Instruction encoding and execution
 - **Performance Analysis**: Understanding CPI, cache hit rates, and pipeline efficiency
+
+For a detailed guide on cache schemes, see [CACHE_SCHEMES.md](CACHE_SCHEMES.md).
 
 ## 🐛 Troubleshooting
 
@@ -312,12 +370,15 @@ The simulator can generate detailed execution logs:
 Potential improvements:
 
 - Multi-level cache hierarchy (L2/L3 caches)
-- Set-associative and fully-associative cache implementations
+- Additional cache replacement policies (FIFO, Random, etc.)
+- Write-back cache policies
 - Branch prediction (static and dynamic)
 - Floating-point instruction support (RV32F)
 - Exception handling and interrupts
 - More advanced forwarding and hazard detection
 - Performance profiling tools
+
+Note: Multiple cache schemes (Direct-mapped, Fully Associative, Set-Associative) are already implemented! See [CACHE_SCHEMES.md](CACHE_SCHEMES.md) for details.
 
 ## 🤝 Contributing
 

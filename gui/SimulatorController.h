@@ -2,6 +2,7 @@
 #define SIMULATOR_CONTROLLER_H
 
 #include "CPU.h"
+#include "CacheScheme.h"
 #include <QObject>
 #include <QTimer>
 #include <QString>
@@ -9,7 +10,6 @@
 
 // Forward declarations
 class SimpleRAM;
-class DirectMappedCache;
 
 class SimulatorController : public QObject {
     Q_OBJECT
@@ -28,6 +28,10 @@ public:
     CPU* getCPU() { return &cpu_; }
     bool isRunning() const { return isRunning_; }
     int getCurrentCycle() const { return currentCycle_; }
+    
+    // Cache scheme management
+    void setCacheScheme(CacheSchemeType scheme);
+    CacheSchemeType getCacheScheme() const { return currentCacheScheme_; }
 
 signals:
     void cycleCompleted(int cycle);
@@ -47,7 +51,8 @@ private:
     bool isRunning_;
     int cyclesPerSecond_;
     SimpleRAM* dram_;
-    DirectMappedCache* dcache_;
+    CacheScheme* dcache_;
+    CacheSchemeType currentCacheScheme_;
     QString logFilePath_;  // Store log file path
     static const int MAX_MEMORY_SIZE = 4096;
     static const int MAX_CYCLES = 10000;  // Prevent infinite loops

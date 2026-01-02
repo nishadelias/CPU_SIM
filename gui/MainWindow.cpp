@@ -82,8 +82,21 @@ void MainWindow::setupUI() {
     speedLayout->addRow("", speedSpinBox_);
     controlGroupLayout->addLayout(speedLayout);
     
+    // Cache scheme selection
+    QGroupBox* cacheGroup = new QGroupBox("Cache Configuration", controlPanel_);
+    QFormLayout* cacheLayout = new QFormLayout(cacheGroup);
+    lblCacheScheme_ = new QLabel("Cache Scheme:", cacheGroup);
+    cacheSchemeCombo_ = new QComboBox(cacheGroup);
+    cacheSchemeCombo_->addItem("Direct Mapped", static_cast<int>(CacheSchemeType::DirectMapped));
+    cacheSchemeCombo_->addItem("Fully Associative", static_cast<int>(CacheSchemeType::FullyAssociative));
+    cacheSchemeCombo_->addItem("2-Way Set Associative", static_cast<int>(CacheSchemeType::SetAssociative2Way));
+    cacheSchemeCombo_->addItem("4-Way Set Associative", static_cast<int>(CacheSchemeType::SetAssociative4Way));
+    cacheSchemeCombo_->addItem("8-Way Set Associative", static_cast<int>(CacheSchemeType::SetAssociative8Way));
+    cacheSchemeCombo_->setCurrentIndex(0);  // Default to Direct Mapped
+    cacheLayout->addRow(lblCacheScheme_, cacheSchemeCombo_);
     controlLayout->addWidget(fileGroup);
     controlLayout->addWidget(controlGroup);
+    controlLayout->addWidget(cacheGroup);
     controlLayout->addStretch();
     
     leftSplitter_->addWidget(controlPanel_);
@@ -161,6 +174,10 @@ void MainWindow::connectSignals() {
     });
     connect(speedSlider_, &QSlider::valueChanged, this, &MainWindow::onSpeedChanged);
     
+    // Cache scheme selection
+    connect(cacheSchemeCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), 
+            this, &MainWindow::onCacheSchemeChanged);
+    
     // Controller signals
     connect(controller_, &SimulatorController::cycleCompleted, this, &MainWindow::onCycleCompleted);
     connect(controller_, &SimulatorController::simulationFinished, this, &MainWindow::onSimulationFinished);
@@ -216,6 +233,13 @@ void MainWindow::pauseSimulation() {
 }
 
 void MainWindow::resetSimulation() {
+    // Apply cache scheme selection before reset (in case it changed)
+    int index = cacheSchemeCombo_->currentIndex();
+    if (index >= 0) {
+        CacheSchemeType scheme = static_cast<CacheSchemeType>(cacheSchemeCombo_->itemData(index).toInt());
+        controller_->setCacheScheme(scheme);
+    }
+    
     controller_->resetSimulation();
     lblCycle_->setText("Cycle: 0");
     lblStatus_->setText("Ready");
@@ -255,5 +279,16 @@ void MainWindow::onSimulationFinished() {
 
 void MainWindow::onSpeedChanged(int value) {
     controller_->setSpeed(value);
+}
+
+void MainWindow::onCacheSchemeChanged(int index) {
+    if (index < 0) return;
+    
+    CacheSchemeType scheme = static_cast<CacheSchemeType>(cacheSchemeCombo_->itemData(index).toInt());
+    controller_->setCacheScheme(scheme);
+    
+    // If simulation is running, we should reset to apply the new cache scheme
+    // But we'll let the user decide - just update the controller
+    // The cache will be applied on next reset
 }
 

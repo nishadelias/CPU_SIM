@@ -2,6 +2,7 @@
 
 #include "CPU.h"
 #include "Cache.h"
+#include "CacheScheme.h"
 #include <iomanip>
 #include <iostream>
 
@@ -1352,9 +1353,8 @@ PipelineSnapshot CPU::get_current_pipeline_state(int cycle) const {
 bool CPU::get_cache_stats(uint64_t& hits, uint64_t& misses) const {
     if (!dmem_) return false;
     
-    // Try to cast to DirectMappedCache to get stats
-    // Note: This requires RTTI (Run-Time Type Information)
-    DirectMappedCache* cache = dynamic_cast<DirectMappedCache*>(dmem_);
+    // Try to cast to CacheStatistics interface
+    CacheStatistics* cache = dynamic_cast<CacheStatistics*>(dmem_);
     if (cache) {
         hits = cache->hits();
         misses = cache->misses();

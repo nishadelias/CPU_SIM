@@ -14,7 +14,9 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QTabWidget>
+#include <QComboBox>
 #include "SimulatorController.h"
+#include "CacheScheme.h"
 #include "PipelineWidget.h"
 #include "StatsWidget.h"
 #include "RegisterWidget.h"
@@ -37,6 +39,7 @@ private slots:
     void onCycleCompleted(int cycle);
     void onSimulationFinished();
     void onSpeedChanged(int value);
+    void onCacheSchemeChanged(int index);
 
 private:
     void setupUI();
@@ -63,6 +66,8 @@ private:
     QLabel* lblSpeed_;
     QSlider* speedSlider_;
     QSpinBox* speedSpinBox_;
+    QLabel* lblCacheScheme_;
+    QComboBox* cacheSchemeCombo_;
     QLabel* lblCycle_;
     QLabel* lblStatus_;
     QLabel* lblFilename_;
