@@ -5,6 +5,8 @@
 #include "CacheScheme.h"
 #include <iomanip>
 #include <iostream>
+#include <cmath>
+#include <cstring>
 
 #define MEMORY_SIZE 4096
 
@@ -14,7 +16,11 @@ CPU::CPU()
 
     for (int i = 0; i < 32; i++) {
         registers[i] = 0;
+        registers_fp[i] = 0.0f;
     }
+    
+    // Initialize FCSR (Floating-Point Control and Status Register)
+    fcsr = 0;  // Default: round to nearest, no exceptions
 
     // Initialize pipeline control
     pipeline_stall = false;
@@ -49,8 +55,12 @@ void CPU::reset() {
     // Reset all registers
     for (int i = 0; i < 32; i++) {
         registers[i] = 0;
+        registers_fp[i] = 0.0f;
         previous_register_values_[i] = 0;
     }
+    
+    // Reset FCSR
+    fcsr = 0;
     
     // Reset pipeline control
     pipeline_stall = false;
@@ -95,12 +105,12 @@ unsigned long CPU::readPC()
 {
 	return PC;
 }
-void CPU::incPC()
+void CPU::incPC(int increment)
 {
-	PC += 4;
+	PC += increment;
 }
 
-// returns the current instruction as a string
+// returns the current instruction as a string (32-bit)
 string CPU::get_instruction(char *IM) {
 	string inst = "";
 	if (IM[PC*2] == '0' && IM[PC*2+1] == '0') {
@@ -110,6 +120,23 @@ string CPU::get_instruction(char *IM) {
         inst += IM[PC*2 + 6 - i*2];
         inst += IM[PC*2 + 7 - i*2];
     }
+	return inst;
+}
+
+// returns a 16-bit instruction as a string
+string CPU::get_instruction_16bit(char *IM) {
+	string inst = "";
+	if (IM[PC*2] == '0' && IM[PC*2+1] == '0' && IM[PC*2+2] == '0' && IM[PC*2+3] == '0') {
+		return "0000";
+	}
+	// Read 2 bytes (4 hex chars) in little-endian format
+	// Following the same pattern as 32-bit: high byte first, then low byte
+	// Memory layout: [byte0_low, byte0_high, byte1_low, byte1_high]
+	// String should be: byte1_high byte1_low byte0_high byte0_low
+	inst += IM[PC*2 + 2];  // byte1 high nibble
+	inst += IM[PC*2 + 3];  // byte1 low nibble
+	inst += IM[PC*2];      // byte0 high nibble
+	inst += IM[PC*2 + 1];  // byte0 low nibble
 	return inst;
 }
 
@@ -170,10 +197,16 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
     // We'll stash load/store widths in ID/EX after this call (set defaults here)
     id_ex.memReadType = 0;
     id_ex.memWriteType = 0;
+    
+    // Initialize FP control signals
+    id_ex.fpRegWrite = false;
+    id_ex.fpRegRead1 = false;
+    id_ex.fpRegRead2 = false;
+    id_ex.fpOp = 0;
 
     // Decode based on opcode
     switch (*opcode) {
-        case 0x33: // R-type (ADD, SUB, OR, XOR, SLL, SRL, SRA, SLT, SLTU)
+        case 0x33: // R-type (ADD, SUB, OR, XOR, SLL, SRL, SRA, SLT, SLTU) and M extension
             *regWrite = true;
             *aluSrc = false;
             *branch = false;
@@ -182,7 +215,35 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             *memToReg = false;
             *upperIm = false;
             
-            if (*funct3 == 0x0 && *funct7 == 0x00) { // ADD
+            // M extension instructions (funct7=0x01) - check first for proper decoding
+            if (*funct7 == 0x01) {
+                if (*funct3 == 0x0) { // MUL
+                    *aluOp = 0x60;
+                }
+                else if (*funct3 == 0x1) { // MULH
+                    *aluOp = 0x61;
+                }
+                else if (*funct3 == 0x2) { // MULHSU
+                    *aluOp = 0x62;
+                }
+                else if (*funct3 == 0x3) { // MULHU
+                    *aluOp = 0x63;
+                }
+                else if (*funct3 == 0x4) { // DIV
+                    *aluOp = 0x64;
+                }
+                else if (*funct3 == 0x5) { // DIVU
+                    *aluOp = 0x65;
+                }
+                else if (*funct3 == 0x6) { // REM
+                    *aluOp = 0x66;
+                }
+                else if (*funct3 == 0x7) { // REMU
+                    *aluOp = 0x67;
+                }
+            }
+            // Standard RV32I R-type instructions
+            else if (*funct3 == 0x0 && *funct7 == 0x00) { // ADD
                 *aluOp = 0x00;
             }
             else if (*funct3 == 0x0 && *funct7 == 0x20) { // SUB
@@ -376,6 +437,105 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
 			// cout << "Program end" << endl;
 			return false;
 
+        case 0x07: // FLW - Load word to FP register
+            id_ex.fpRegWrite = true;
+            id_ex.fpRegRead1 = false;
+            id_ex.fpRegRead2 = false;
+            *regWrite = false;  // Not writing to integer register
+            *aluSrc = true;
+            *branch = false;
+            *memRe = true;
+            *memWr = false;
+            *memToReg = true;  // Load from memory
+            *upperIm = false;
+            *aluOp = 0x44;  // Use LW address calculation
+            id_ex.memReadType = 6;  // FLW
+            break;
+
+        case 0x27: // FSW - Store word from FP register
+            id_ex.fpRegWrite = false;
+            id_ex.fpRegRead1 = false;
+            id_ex.fpRegRead2 = true;  // Read rs2 from FP register
+            *regWrite = false;
+            *aluSrc = true;
+            *branch = false;
+            *memRe = false;
+            *memWr = true;
+            *memToReg = false;
+            *upperIm = false;
+            *aluOp = 0x47;  // Use SW address calculation
+            id_ex.memWriteType = 4;  // FSW
+            break;
+
+        case 0x53: // FP arithmetic instructions (FADD.S, FSUB.S, FMUL.S, FDIV.S, etc.)
+            // Decode based on funct7 and funct3
+            id_ex.fpRegWrite = true;
+            id_ex.fpRegRead1 = true;  // Read rs1 from FP register
+            id_ex.fpRegRead2 = true;  // Read rs2 from FP register
+            *regWrite = false;  // Writing to FP register, not integer
+            *aluSrc = false;
+            *branch = false;
+            *memRe = false;
+            *memWr = false;
+            *memToReg = false;
+            *upperIm = false;
+            *aluOp = 0;  // Not using ALU
+            
+            // Decode FP operation based on funct7 and funct3
+            if (*funct7 == 0x00) {
+                if (*funct3 == 0x0) {
+                    id_ex.fpOp = 0x70;  // FADD.S
+                } else if (*funct3 == 0x4) {
+                    id_ex.fpOp = 0x71;  // FSUB.S
+                } else if (*funct3 == 0x8) {
+                    id_ex.fpOp = 0x72;  // FMUL.S
+                } else if (*funct3 == 0xC) {
+                    id_ex.fpOp = 0x73;  // FDIV.S
+                } else if (*funct3 == 0x10) {
+                    id_ex.fpOp = 0x74;  // FSGNJ.S
+                } else if (*funct3 == 0x14) {
+                    id_ex.fpOp = 0x75;  // FMIN.S
+                } else if (*funct3 == 0x18) {
+                    id_ex.fpOp = 0x76;  // FMAX.S
+                } else if (*funct3 == 0x50) {
+                    id_ex.fpOp = 0x77;  // FSQRT.S
+                } else if (*funct3 == 0x60) {
+                    id_ex.fpOp = 0x78;  // FCVT.W.S (convert float to int)
+                    id_ex.fpRegRead2 = false;  // Only uses rs1
+                    *regWrite = true;  // Writes to integer register
+                } else if (*funct3 == 0x68) {
+                    id_ex.fpOp = 0x79;  // FCVT.S.W (convert int to float)
+                    id_ex.fpRegRead1 = false;  // Reads from integer register
+                    id_ex.fpRegRead2 = false;
+                } else if (*funct3 == 0x70) {
+                    id_ex.fpOp = 0x7A;  // FMV.X.W (move FP to int)
+                    id_ex.fpRegRead2 = false;
+                    *regWrite = true;  // Writes to integer register
+                } else if (*funct3 == 0x78) {
+                    id_ex.fpOp = 0x7B;  // FMV.W.X (move int to FP)
+                    id_ex.fpRegRead1 = false;  // Reads from integer register
+                    id_ex.fpRegRead2 = false;
+                }
+            } else if (*funct7 == 0x50) {
+                if (*funct3 == 0x0) {
+                    id_ex.fpOp = 0x7C;  // FLE.S (less than or equal)
+                    *regWrite = true;  // Writes comparison result to integer register
+                } else if (*funct3 == 0x1) {
+                    id_ex.fpOp = 0x7D;  // FLT.S (less than)
+                    *regWrite = true;
+                } else if (*funct3 == 0x2) {
+                    id_ex.fpOp = 0x7E;  // FEQ.S (equal)
+                    *regWrite = true;
+                }
+            } else if (*funct7 == 0x70) {
+                if (*funct3 == 0x0) {
+                    id_ex.fpOp = 0x7F;  // FCLASS.S (classify float)
+                    id_ex.fpRegRead2 = false;
+                    *regWrite = true;  // Writes to integer register
+                }
+            }
+            break;
+
         default:
             // For now, treat unknown opcodes as NOP to avoid pipeline stalls
             *regWrite = false;
@@ -568,22 +728,52 @@ void CPU::instruction_fetch(char* instMem, bool debug) {
         return;
     }
 
-    string inst_str = get_instruction(instMem);
-    if (inst_str == "00000000") {
+    // First, fetch 16 bits to check if it's a compressed instruction
+    string inst_16_str = get_instruction_16bit(instMem);
+    if (inst_16_str == "0000") {
         if_id.valid = false;
         if (debug) { std::cout << "IF: NOP instruction (all zeros)" << std::endl; }
         return;
     }
-    if_id.instruction = std::stoul(inst_str, nullptr, 16);
-    if_id.pc = PC;
-    if_id.valid = true;
+    
+    uint16_t inst_16 = static_cast<uint16_t>(std::stoul(inst_16_str, nullptr, 16));
+    
+    // Check if it's a compressed instruction (bottom 2 bits != 0b11)
+    if (is_compressed_instruction(inst_16)) {
+        // It's a 16-bit compressed instruction
+        if_id.is_compressed = true;
+        if_id.compressed_inst = inst_16;
+        // Expand to 32-bit equivalent
+        if_id.instruction = expand_compressed_instruction(inst_16);
+        if_id.pc = PC;
+        if_id.valid = true;
+        
+        if (debug) {
+            std::cout << "IF: Fetched compressed instruction 0x" << std::hex << inst_16 
+                      << " (expanded to 0x" << if_id.instruction << ") at PC 0x" << if_id.pc << std::dec << std::endl;
+        }
+        incPC(2);  // Increment PC by 2 for compressed instruction
+    } else {
+        // It's a 32-bit instruction
+        string inst_str = get_instruction(instMem);
+        if (inst_str == "00000000") {
+            if_id.valid = false;
+            if (debug) { std::cout << "IF: NOP instruction (all zeros)" << std::endl; }
+            return;
+        }
+        if_id.instruction = std::stoul(inst_str, nullptr, 16);
+        if_id.is_compressed = false;
+        if_id.compressed_inst = 0;
+        if_id.pc = PC;
+        if_id.valid = true;
 
-    if (debug) {
-        std::cout << "IF: Fetched instruction 0x" << std::hex << if_id.instruction 
-                  << " at PC 0x" << if_id.pc << std::dec << std::endl;
-        std::cout << "IF: Raw instruction string: " << inst_str << std::endl;
+        if (debug) {
+            std::cout << "IF: Fetched instruction 0x" << std::hex << if_id.instruction 
+                      << " at PC 0x" << if_id.pc << std::dec << std::endl;
+            std::cout << "IF: Raw instruction string: " << inst_str << std::endl;
+        }
+        incPC(4);  // Increment PC by 4 for 32-bit instruction
     }
-    incPC();
 }
 
 
@@ -657,6 +847,16 @@ void CPU::instruction_decode(bool debug) {
     // Read register values
     int32_t rs1_data = (rs1 != 0) ? get_register_value(rs1) : 0;
     int32_t rs2_data = (rs2 != 0) ? get_register_value(rs2) : 0;
+    
+    // Read FP register values if needed
+    float rs1_fp_data = 0.0f;
+    float rs2_fp_data = 0.0f;
+    if (id_ex.fpRegRead1 && rs1 != 0) {
+        rs1_fp_data = registers_fp[rs1];
+    }
+    if (id_ex.fpRegRead2 && rs2 != 0) {
+        rs2_fp_data = registers_fp[rs2];
+    }
 
     // Generate immediate value
     int32_t immediate = generate_immediate(if_id.instruction, opcode);
@@ -706,6 +906,8 @@ void CPU::instruction_decode(bool debug) {
     id_ex.funct7 = funct7;
     id_ex.rs1_data = rs1_data;
     id_ex.rs2_data = rs2_data;
+    id_ex.rs1_fp_data = rs1_fp_data;
+    id_ex.rs2_fp_data = rs2_fp_data;
     id_ex.immediate = immediate;
     id_ex.pc = if_id.pc;
     id_ex.valid = true;
@@ -716,7 +918,10 @@ void CPU::instruction_decode(bool debug) {
     }
 
     if (debug) {
-        std::cout << "ID: Decoded instruction - " << disassemble_instruction(if_id.instruction) << std::endl;
+        string disasm = if_id.is_compressed ? 
+            disassemble_compressed_instruction(if_id.compressed_inst) + " [expanded: " + disassemble_instruction(if_id.instruction) + "]" :
+            disassemble_instruction(if_id.instruction);
+        std::cout << "ID: Decoded instruction - " << disasm << std::endl;
         std::cout << "    rs1_data: " << rs1_data << ", rs2_data: " << rs2_data << ", immediate: " << immediate << std::endl;
         std::cout << "    Valid: " << (valid ? "true" : "false") << std::endl;
     }
@@ -764,8 +969,52 @@ void CPU::execute_stage(bool debug) {
         operand2 = 0;
     }
 
+    // Forward FP operands for FP operations
+    float fp_operand1 = id_ex.rs1_fp_data;
+    float fp_operand2 = id_ex.rs2_fp_data;
+    
+    // FP forwarding from EX/MEM
+    if (ex_mem_prev.fpRegWrite && ex_mem_prev.rd != 0 && ex_mem_prev.rd == id_ex.rs1 && id_ex.fpRegRead1) {
+        fp_operand1 = ex_mem_prev.fp_result;
+    } else if (mem_wb_prev.fpRegWrite && mem_wb_prev.rd != 0 && mem_wb_prev.rd == id_ex.rs1 && id_ex.fpRegRead1) {
+        fp_operand1 = mem_wb_prev.memToReg ? mem_wb_prev.mem_fp_data : mem_wb_prev.fp_result;
+    }
+    
+    if (ex_mem_prev.fpRegWrite && ex_mem_prev.rd != 0 && ex_mem_prev.rd == id_ex.rs2 && id_ex.fpRegRead2) {
+        fp_operand2 = ex_mem_prev.fp_result;
+    } else if (mem_wb_prev.fpRegWrite && mem_wb_prev.rd != 0 && mem_wb_prev.rd == id_ex.rs2 && id_ex.fpRegRead2) {
+        fp_operand2 = mem_wb_prev.memToReg ? mem_wb_prev.mem_fp_data : mem_wb_prev.fp_result;
+    }
+
     // Call ALU
     int32_t alu_result = alu.execute(operand1, operand2, id_ex.aluOp);
+    
+    // Execute FP operations
+    float fp_result = 0.0f;
+    int32_t fp_int_result = 0;
+    if (id_ex.fpOp != 0) {
+        if (id_ex.fpOp == 0x78) {  // FCVT.W.S - convert float to int
+            fp_int_result = static_cast<int32_t>(fp_operand1);
+        } else if (id_ex.fpOp == 0x79) {  // FCVT.S.W - convert int to float
+            fp_result = static_cast<float>(operand1);
+        } else if (id_ex.fpOp == 0x7A) {  // FMV.X.W - move FP to int (bitwise)
+            uint32_t bits;
+            memcpy(&bits, &fp_operand1, sizeof(uint32_t));
+            fp_int_result = static_cast<int32_t>(bits);
+        } else if (id_ex.fpOp == 0x7B) {  // FMV.W.X - move int to FP (bitwise)
+            uint32_t bits = static_cast<uint32_t>(operand1);
+            memcpy(&fp_result, &bits, sizeof(float));
+        } else if (id_ex.fpOp == 0x7C || id_ex.fpOp == 0x7D || id_ex.fpOp == 0x7E) {  // FP comparisons
+            fp_int_result = execute_fp_compare(fp_operand1, fp_operand2, id_ex.fpOp);
+        } else if (id_ex.fpOp == 0x7F) {  // FCLASS.S
+            fp_int_result = execute_fp_classify(fp_operand1);
+        } else if (id_ex.fpOp == 0x77) {  // FSQRT.S - only uses operand1
+            fp_result = execute_fp_operation(fp_operand1, 0.0f, id_ex.fpOp);
+        } else {
+            // Other FP operations use both operands
+            fp_result = execute_fp_operation(fp_operand1, fp_operand2, id_ex.fpOp);
+        }
+    }
 
     // --- Jumps (handle control transfer + link) ---
     if (id_ex.opcode == 0x6F) { // JAL
@@ -899,6 +1148,14 @@ void CPU::execute_stage(bool debug) {
     } else {
         forwarded_rs2_data = id_ex.rs2_data;
     }
+    
+    // Forward FP rs2_data for FSW operations
+    float forwarded_rs2_fp_data = id_ex.rs2_fp_data;
+    if (ex_mem_prev.fpRegWrite && ex_mem_prev.rd != 0 && ex_mem_prev.rd == id_ex.rs2 && id_ex.memWriteType == 4) {
+        forwarded_rs2_fp_data = ex_mem_prev.fp_result;
+    } else if (mem_wb_prev.fpRegWrite && mem_wb_prev.rd != 0 && mem_wb_prev.rd == id_ex.rs2 && id_ex.memWriteType == 4) {
+        forwarded_rs2_fp_data = mem_wb_prev.memToReg ? mem_wb_prev.mem_fp_data : mem_wb_prev.fp_result;
+    }
 
     // Update EX/MEM register
     ex_mem.regWrite = id_ex.regWrite;
@@ -907,8 +1164,11 @@ void CPU::execute_stage(bool debug) {
     ex_mem.memToReg = id_ex.memToReg;
     ex_mem.memReadType  = id_ex.memReadType;
     ex_mem.memWriteType = id_ex.memWriteType;
-    ex_mem.alu_result = alu_result;
+    ex_mem.fpRegWrite = id_ex.fpRegWrite;
+    ex_mem.fp_result = (id_ex.fpOp != 0 && id_ex.fpOp != 0x78 && id_ex.fpOp != 0x7A) ? fp_result : 0.0f;
+    ex_mem.alu_result = (id_ex.fpOp == 0x78 || id_ex.fpOp == 0x7A || id_ex.fpOp == 0x7C || id_ex.fpOp == 0x7D || id_ex.fpOp == 0x7E || id_ex.fpOp == 0x7F) ? fp_int_result : alu_result;
     ex_mem.rs2_data = forwarded_rs2_data;
+    ex_mem.rs2_fp_data = forwarded_rs2_fp_data;
     ex_mem.rd = id_ex.rd;
     ex_mem.pc = id_ex.pc;
     ex_mem.valid = true;
@@ -944,6 +1204,7 @@ void CPU::memory_stage(bool debug) {
     }
     
     int32_t mem_data = 0;
+    float mem_fp_data = 0.0f;
     
     // Memory operations
     if (ex_mem.memRe) {
@@ -951,7 +1212,14 @@ void CPU::memory_stage(bool debug) {
         uint64_t hits_before = 0, misses_before = 0;
         bool had_cache = get_cache_stats(hits_before, misses_before);
         
-        mem_data = read_memory(ex_mem.alu_result, ex_mem.memReadType);
+        if (ex_mem.memReadType == 6) {  // FLW - load float
+            mem_data = read_memory(ex_mem.alu_result, 5);  // Use LW read type
+            // Convert int32_t to float (bitwise copy)
+            uint32_t bits = static_cast<uint32_t>(mem_data);
+            memcpy(&mem_fp_data, &bits, sizeof(float));
+        } else {
+            mem_data = read_memory(ex_mem.alu_result, ex_mem.memReadType);
+        }
         stats_.memory_reads++;
         
         // Check if this was a cache hit or miss
@@ -969,14 +1237,25 @@ void CPU::memory_stage(bool debug) {
         }
         
         if (debug) {
-            std::cout << "MEM: Load from address " << ex_mem.alu_result << " = " << mem_data << std::endl;
+            if (ex_mem.memReadType == 6) {
+                std::cout << "MEM: FLW from address " << ex_mem.alu_result << " = " << mem_fp_data << std::endl;
+            } else {
+                std::cout << "MEM: Load from address " << ex_mem.alu_result << " = " << mem_data << std::endl;
+            }
         }
     } else if (ex_mem.memWr) {
         // Store operation - track cache stats before access
         uint64_t hits_before = 0, misses_before = 0;
         bool had_cache = get_cache_stats(hits_before, misses_before);
         
-        write_memory(ex_mem.alu_result, ex_mem.rs2_data, ex_mem.memWriteType);
+        if (ex_mem.memWriteType == 4) {  // FSW - store float
+            // Convert float to int32_t (bitwise copy)
+            uint32_t bits;
+            memcpy(&bits, &ex_mem.rs2_fp_data, sizeof(float));
+            write_memory(ex_mem.alu_result, static_cast<int32_t>(bits), 3);  // Use SW write type
+        } else {
+            write_memory(ex_mem.alu_result, ex_mem.rs2_data, ex_mem.memWriteType);
+        }
         stats_.memory_writes++;
         
         // Check if this was a cache hit or miss
@@ -1036,7 +1315,22 @@ void CPU::write_back_stage(bool debug) {
             std::cout << std::dec;
             std::cout << "WB: Write " << write_data << " to register " << REGISTER_NAMES[mem_wb.rd] << std::endl;
         }
-    } else if (mem_wb.valid) {
+    }
+    
+    if (mem_wb.fpRegWrite && mem_wb.rd != 0) {
+        float write_fp_data = mem_wb.memToReg ? mem_wb.mem_fp_data : mem_wb.fp_result;
+        registers_fp[mem_wb.rd] = write_fp_data;
+        if (!mem_wb.regWrite) {  // Only count once if both regWrite and fpRegWrite are true
+            stats_.instructions_retired++;
+        }
+        
+        if (debug) {
+            std::cout << std::dec;
+            std::cout << "WB: Write " << write_fp_data << " to FP register " << FP_REGISTER_NAMES[mem_wb.rd] << std::endl;
+        }
+    }
+    
+    if (mem_wb.valid && !mem_wb.regWrite && !mem_wb.fpRegWrite) {
         // Count instructions that complete even if they don't write to registers
         stats_.instructions_retired++;
         
@@ -1147,6 +1441,339 @@ void CPU::set_max_pc(int max_pc) {
     maxPC = max_pc;
 }
 
+// Check if a 16-bit instruction is a compressed instruction
+// Compressed instructions have bottom 2 bits != 0b11
+bool CPU::is_compressed_instruction(uint16_t inst) const {
+    return (inst & 0x3) != 0x3;
+}
+
+// Expand a 16-bit compressed instruction to its 32-bit equivalent
+uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
+    uint8_t op = compressed_inst & 0x3;
+    uint8_t funct3 = (compressed_inst >> 13) & 0x7;
+    uint8_t rd_rs1 = (compressed_inst >> 7) & 0x1F;
+    uint8_t rs2 = (compressed_inst >> 2) & 0x1F;
+    
+    // Quadrant 0: 00 (C.ADDI4SPN, C.LW, C.SW, etc.)
+    if (op == 0x0) {
+        if (funct3 == 0x0) {
+            // C.ADDI4SPN: addi rd', x2, nzuimm[9:2]
+            // rd' = 8 + rd_rs1[4:2], rs1 = x2, imm = {nzuimm[5:4], nzuimm[9:6], nzuimm[2], nzuimm[3], 2'b0}
+            uint8_t rd_prime = 8 + ((compressed_inst >> 2) & 0x7);
+            uint32_t imm = ((compressed_inst >> 5) & 0x30) |  // bits [5:4]
+                          ((compressed_inst >> 7) & 0xC) |   // bits [9:8]
+                          ((compressed_inst >> 4) & 0x4) |    // bit [6]
+                          ((compressed_inst >> 2) & 0x8);    // bit [7]
+            if (imm == 0) return 0; // Reserved encoding
+            imm <<= 2; // Scale by 4
+            // ADDI rd', x2, imm
+            return (0x13) | (rd_prime << 7) | (0x02 << 15) | ((imm & 0xFFF) << 20);
+        } else if (funct3 == 0x2) {
+            // C.LW: lw rd', offset[6:2](rs1')
+            // rd' = 8 + rd_rs1[4:2], rs1' = 8 + rd_rs1[7:5]
+            uint8_t rd_prime = 8 + ((compressed_inst >> 2) & 0x7);
+            uint8_t rs1_prime = 8 + ((compressed_inst >> 7) & 0x7);
+            uint32_t imm = ((compressed_inst >> 5) & 0x20) |  // bit [5]
+                          ((compressed_inst >> 6) & 0x18) |   // bits [4:3]
+                          ((compressed_inst >> 2) & 0x4);     // bit [2]
+            imm <<= 2; // Scale by 4
+            // LW rd', imm(rs1')
+            return (0x03) | (rd_prime << 7) | (0x2 << 12) | (rs1_prime << 15) | ((imm & 0xFFF) << 20);
+        } else if (funct3 == 0x6) {
+            // C.SW: sw rs2', offset[6:2](rs1')
+            // rs2' = 8 + rs2[4:2], rs1' = 8 + rs2[7:5]
+            uint8_t rs2_prime = 8 + ((compressed_inst >> 2) & 0x7);
+            uint8_t rs1_prime = 8 + ((compressed_inst >> 7) & 0x7);
+            uint32_t imm = ((compressed_inst >> 5) & 0x20) |  // bit [5]
+                          ((compressed_inst >> 6) & 0x18) |   // bits [4:3]
+                          ((compressed_inst >> 2) & 0x4);     // bit [2]
+            imm <<= 2; // Scale by 4
+            // SW rs2', imm(rs1')
+            return (0x23) | (0x2 << 12) | (rs1_prime << 15) | (rs2_prime << 20) | ((imm & 0xFE0) << 20) | ((imm & 0x1F) << 7);
+        }
+    }
+    // Quadrant 1: 01 (C.ADDI, C.JAL, C.LI, C.ADDI16SP, C.LUI, C.SRLI, C.SRAI, C.ANDI, C.SUB, C.XOR, C.OR, C.AND, C.J, C.BEQZ, C.BNEZ)
+    else if (op == 0x1) {
+        if (funct3 == 0x0) {
+            // C.ADDI: addi rd, rd, nzimm[5:0]
+            // rd = rd_rs1, imm = sign-extend({rd_rs1[5], imm[4:0]})
+            int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFFFE0 : 0; // sign bit
+            imm |= ((compressed_inst >> 2) & 0x1F);
+            if (rd_rs1 == 0) return 0; // Reserved (NOP)
+            // ADDI rd, rd, imm
+            return (0x13) | (rd_rs1 << 7) | (0x0 << 12) | (rd_rs1 << 15) | ((imm & 0xFFF) << 20);
+        } else if (funct3 == 0x1) {
+            // C.JAL: jal x1, offset[11:1]
+            // Only valid in RV32, not RV32C (but some implementations support it)
+            // For now, treat as C.J (no link)
+            int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFF000 : 0; // sign bit
+            imm |= ((compressed_inst >> 2) & 0x100) |  // bit [10]
+                   ((compressed_inst >> 3) & 0x80) |   // bit [9]
+                   ((compressed_inst >> 6) & 0x40) |   // bit [8]
+                   ((compressed_inst >> 7) & 0x20) |   // bit [7]
+                   ((compressed_inst >> 8) & 0x10) |   // bit [6]
+                   ((compressed_inst >> 9) & 0x8) |    // bit [5]
+                   ((compressed_inst >> 10) & 0x4) |   // bit [4]
+                   ((compressed_inst >> 11) & 0x2) |   // bit [3]
+                   ((compressed_inst >> 5) & 0x1);     // bit [2]
+            imm <<= 1; // Scale by 2
+            // JAL x1, imm
+            return (0x6F) | (0x01 << 7) | ((imm & 0x7FE) << 20) | ((imm & 0x800) << 12) | ((imm & 0xFF000) << 12) | ((imm & 0x100000) << 31);
+        } else if (funct3 == 0x2) {
+            // C.LI: addi rd, x0, imm[5:0]
+            // rd = rd_rs1, imm = sign-extend(imm[5:0])
+            int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFFFE0 : 0; // sign bit
+            imm |= ((compressed_inst >> 2) & 0x1F);
+            if (rd_rs1 == 0) return 0; // Reserved
+            // ADDI rd, x0, imm
+            return (0x13) | (rd_rs1 << 7) | (0x0 << 12) | (0x0 << 15) | ((imm & 0xFFF) << 20);
+        } else if (funct3 == 0x3) {
+            if (rd_rs1 == 2) {
+                // C.ADDI16SP: addi x2, x2, nzimm[9:4]
+                int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFFF00 : 0; // sign bit
+                imm |= ((compressed_inst >> 2) & 0x10) |  // bit [4]
+                       ((compressed_inst >> 3) & 0x8) |   // bit [5]
+                       ((compressed_inst >> 5) & 0x20) |   // bit [6]
+                       ((compressed_inst >> 6) & 0x40) |   // bit [7]
+                       ((compressed_inst >> 7) & 0x80);    // bit [8]
+                if (imm == 0) return 0; // Reserved
+                imm <<= 4; // Scale by 16
+                // ADDI x2, x2, imm
+                return (0x13) | (0x02 << 7) | (0x0 << 12) | (0x02 << 15) | ((imm & 0xFFF) << 20);
+            } else {
+                // C.LUI: lui rd, nzimm[17:12]
+                int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFF000 : 0; // sign bit
+                imm |= ((compressed_inst >> 2) & 0x1F) << 12;
+                if (rd_rs1 == 0 || rd_rs1 == 2) return 0; // Reserved
+                // LUI rd, imm
+                return (0x37) | (rd_rs1 << 7) | ((imm & 0xFFFFF) << 12);
+            }
+        } else if (funct3 == 0x4) {
+            // C.SRLI, C.SRAI, C.ANDI, C.SUB, C.XOR, C.OR, C.AND
+            uint8_t funct2 = (compressed_inst >> 10) & 0x3;
+            if (funct2 == 0x0) {
+                // C.SRLI: srli rd', rd', shamt[5:0]
+                uint8_t rd_prime = 8 + ((compressed_inst >> 7) & 0x7);
+                uint8_t shamt = ((compressed_inst >> 2) & 0x1F);
+                if (shamt == 0) return 0; // Reserved
+                // SRLI rd', rd', shamt
+                return (0x13) | (rd_prime << 7) | (0x5 << 12) | (rd_prime << 15) | (shamt << 20);
+            } else if (funct2 == 0x1) {
+                // C.SRAI: srai rd', rd', shamt[5:0]
+                uint8_t rd_prime = 8 + ((compressed_inst >> 7) & 0x7);
+                uint8_t shamt = ((compressed_inst >> 2) & 0x1F);
+                if (shamt == 0) return 0; // Reserved
+                // SRAI rd', rd', shamt
+                return (0x13) | (rd_prime << 7) | (0x5 << 12) | (0x20 << 25) | (rd_prime << 15) | (shamt << 20);
+            } else if (funct2 == 0x2) {
+                // C.ANDI: andi rd', rd', imm[5:0]
+                uint8_t rd_prime = 8 + ((compressed_inst >> 7) & 0x7);
+                int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFFFE0 : 0; // sign bit
+                imm |= ((compressed_inst >> 2) & 0x1F);
+                // ANDI rd', rd', imm
+                return (0x13) | (rd_prime << 7) | (0x7 << 12) | (rd_prime << 15) | ((imm & 0xFFF) << 20);
+            } else if (funct2 == 0x3) {
+                uint8_t funct6 = (compressed_inst >> 10) & 0x3F;
+                uint8_t rd_prime = 8 + ((compressed_inst >> 7) & 0x7);
+                uint8_t rs2_prime = 8 + ((compressed_inst >> 2) & 0x7);
+                if (funct6 == 0x23) {
+                    // C.SUB: sub rd', rd', rs2'
+                    return (0x33) | (rd_prime << 7) | (0x0 << 12) | (0x20 << 25) | (rd_prime << 15) | (rs2_prime << 20);
+                } else if (funct6 == 0x27) {
+                    // C.XOR: xor rd', rd', rs2'
+                    return (0x33) | (rd_prime << 7) | (0x4 << 12) | (rd_prime << 15) | (rs2_prime << 20);
+                } else if (funct6 == 0x26) {
+                    // C.OR: or rd', rd', rs2'
+                    return (0x33) | (rd_prime << 7) | (0x6 << 12) | (rd_prime << 15) | (rs2_prime << 20);
+                } else if (funct6 == 0x24) {
+                    // C.AND: and rd', rd', rs2'
+                    return (0x33) | (rd_prime << 7) | (0x7 << 12) | (rd_prime << 15) | (rs2_prime << 20);
+                }
+            }
+        } else if (funct3 == 0x5) {
+            // C.J: jal x0, offset[11:1]
+            int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFF000 : 0; // sign bit
+            imm |= ((compressed_inst >> 2) & 0x100) |  // bit [10]
+                   ((compressed_inst >> 3) & 0x80) |   // bit [9]
+                   ((compressed_inst >> 6) & 0x40) |   // bit [8]
+                   ((compressed_inst >> 7) & 0x20) |   // bit [7]
+                   ((compressed_inst >> 8) & 0x10) |   // bit [6]
+                   ((compressed_inst >> 9) & 0x8) |    // bit [5]
+                   ((compressed_inst >> 10) & 0x4) |   // bit [4]
+                   ((compressed_inst >> 11) & 0x2) |   // bit [3]
+                   ((compressed_inst >> 5) & 0x1);     // bit [2]
+            imm <<= 1; // Scale by 2
+            // JAL x0, imm
+            return (0x6F) | (0x00 << 7) | ((imm & 0x7FE) << 20) | ((imm & 0x800) << 12) | ((imm & 0xFF000) << 12) | ((imm & 0x100000) << 31);
+        } else if (funct3 == 0x6) {
+            // C.BEQZ: beq rs1', x0, offset[8:1]
+            uint8_t rs1_prime = 8 + ((compressed_inst >> 7) & 0x7);
+            int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFFF00 : 0; // sign bit
+            imm |= ((compressed_inst >> 2) & 0x20) |   // bit [5]
+                   ((compressed_inst >> 3) & 0x18) |   // bits [4:3]
+                   ((compressed_inst >> 10) & 0x40) |  // bit [6]
+                   ((compressed_inst >> 5) & 0x2) |     // bit [1]
+                   ((compressed_inst >> 6) & 0x1);      // bit [2]
+            imm <<= 1; // Scale by 2
+            // BEQ rs1', x0, imm
+            return (0x63) | (0x0 << 12) | (rs1_prime << 15) | ((imm & 0x800) << 4) | ((imm & 0x1E) << 7) | ((imm & 0x3E0) << 20) | ((imm & 0x400) >> 3);
+        } else if (funct3 == 0x7) {
+            // C.BNEZ: bne rs1', x0, offset[8:1]
+            uint8_t rs1_prime = 8 + ((compressed_inst >> 7) & 0x7);
+            int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFFF00 : 0; // sign bit
+            imm |= ((compressed_inst >> 2) & 0x20) |   // bit [5]
+                   ((compressed_inst >> 3) & 0x18) |   // bits [4:3]
+                   ((compressed_inst >> 10) & 0x40) |  // bit [6]
+                   ((compressed_inst >> 5) & 0x2) |     // bit [1]
+                   ((compressed_inst >> 6) & 0x1);      // bit [2]
+            imm <<= 1; // Scale by 2
+            // BNE rs1', x0, imm
+            return (0x63) | (0x1 << 12) | (rs1_prime << 15) | ((imm & 0x800) << 4) | ((imm & 0x1E) << 7) | ((imm & 0x3E0) << 20) | ((imm & 0x400) >> 3);
+        }
+    }
+    // Quadrant 2: 10 (C.SLLI, C.LWSP, C.JR, C.MV, C.JALR, C.ADD, C.SWSP, C.EBREAK)
+    else if (op == 0x2) {
+        if (funct3 == 0x0) {
+            // C.SLLI: slli rd, rd, shamt[5:0]
+            uint8_t shamt = ((compressed_inst >> 2) & 0x1F);
+            if (rd_rs1 == 0 || shamt == 0) return 0; // Reserved
+            // SLLI rd, rd, shamt
+            return (0x13) | (rd_rs1 << 7) | (0x1 << 12) | (rd_rs1 << 15) | (shamt << 20);
+        } else if (funct3 == 0x2) {
+            // C.LWSP: lw rd, offset[7:2](x2)
+            uint32_t imm = ((compressed_inst >> 2) & 0x1C) |  // bits [4:2]
+                          ((compressed_inst >> 7) & 0x20) |   // bit [5]
+                          ((compressed_inst >> 4) & 0x3);    // bits [7:6]
+            if (rd_rs1 == 0) return 0; // Reserved
+            imm <<= 2; // Scale by 4
+            // LW rd, imm(x2)
+            return (0x03) | (rd_rs1 << 7) | (0x2 << 12) | (0x02 << 15) | ((imm & 0xFFF) << 20);
+        } else if (funct3 == 0x4) {
+            if (rs2 == 0) {
+                // C.JR: jalr x0, 0(rs1)
+                if (rd_rs1 == 0) return 0; // Reserved
+                // JALR x0, 0(rs1)
+                return (0x67) | (0x00 << 7) | (0x0 << 12) | (rd_rs1 << 15);
+            } else {
+                // C.MV: add rd, x0, rs2
+                if (rd_rs1 == 0) return 0; // Reserved
+                // ADD rd, x0, rs2
+                return (0x33) | (rd_rs1 << 7) | (0x0 << 12) | (0x0 << 15) | (rs2 << 20);
+            }
+        } else if (funct3 == 0x5) {
+            if (rs2 == 0) {
+                // C.JALR: jalr x1, 0(rs1)
+                if (rd_rs1 == 0) return 0; // Reserved
+                // JALR x1, 0(rs1)
+                return (0x67) | (0x01 << 7) | (0x0 << 12) | (rd_rs1 << 15);
+            } else {
+                // C.ADD: add rd, rd, rs2
+                if (rd_rs1 == 0) return 0; // Reserved
+                // ADD rd, rd, rs2
+                return (0x33) | (rd_rs1 << 7) | (0x0 << 12) | (rd_rs1 << 15) | (rs2 << 20);
+            }
+        } else if (funct3 == 0x6) {
+            // C.SWSP: sw rs2, offset[7:2](x2)
+            uint32_t imm = ((compressed_inst >> 2) & 0x1C) |  // bits [4:2]
+                          ((compressed_inst >> 7) & 0x20) |   // bit [5]
+                          ((compressed_inst >> 4) & 0x3);    // bits [7:6]
+            imm <<= 2; // Scale by 4
+            // SW rs2, imm(x2)
+            return (0x23) | (0x2 << 12) | (0x02 << 15) | (rs2 << 20) | ((imm & 0xFE0) << 20) | ((imm & 0x1F) << 7);
+        }
+    }
+    
+    // If we can't decode it, return 0 (will be treated as invalid)
+    return 0;
+}
+
+// Floating-point unit operations
+float CPU::execute_fp_operation(float operand1, float operand2, int fpOp) const {
+    switch (fpOp) {
+        case 0x70: // FADD.S
+            return operand1 + operand2;
+        case 0x71: // FSUB.S
+            return operand1 - operand2;
+        case 0x72: // FMUL.S
+            return operand1 * operand2;
+        case 0x73: // FDIV.S
+            if (operand2 == 0.0f) {
+                // Division by zero - return infinity with sign of operand1
+                return (operand1 < 0.0f) ? -INFINITY : INFINITY;
+            }
+            return operand1 / operand2;
+        case 0x74: // FSGNJ.S (copy sign from rs2 to rs1)
+            return copysignf(operand1, operand2);
+        case 0x75: // FMIN.S
+            return (operand1 < operand2) ? operand1 : operand2;
+        case 0x76: // FMAX.S
+            return (operand1 > operand2) ? operand1 : operand2;
+        case 0x77: // FSQRT.S
+            if (operand1 < 0.0f) {
+                // Negative input - return NaN
+                return NAN;
+            }
+            return sqrtf(operand1);
+        case 0x79: // FCVT.S.W (convert int to float) - operand1 is int value
+            return static_cast<float>(static_cast<int32_t>(operand1));
+        case 0x7B: // FMV.W.X (move int to FP - bitwise copy)
+            {
+                uint32_t bits = static_cast<uint32_t>(static_cast<int32_t>(operand1));
+                float result;
+                memcpy(&result, &bits, sizeof(float));
+                return result;
+            }
+        default:
+            return 0.0f;
+    }
+}
+
+int32_t CPU::execute_fp_compare(float operand1, float operand2, int fpOp) const {
+    switch (fpOp) {
+        case 0x7C: // FLE.S (less than or equal)
+            return (operand1 <= operand2) ? 1 : 0;
+        case 0x7D: // FLT.S (less than)
+            return (operand1 < operand2) ? 1 : 0;
+        case 0x7E: // FEQ.S (equal)
+            return (operand1 == operand2) ? 1 : 0;
+        default:
+            return 0;
+    }
+}
+
+int32_t CPU::execute_fp_classify(float operand) const {
+    int32_t result = 0;
+    
+    if (isnan(operand)) {
+        result |= 0x200;  // Negative NaN
+        if (copysignf(1.0f, operand) < 0.0f) {
+            result |= 0x100;  // Sign bit
+        }
+    } else if (isinf(operand)) {
+        result |= 0x80;  // Negative infinity
+        if (operand < 0.0f) {
+            result |= 0x40;  // Sign bit
+        }
+    } else if (operand == 0.0f) {
+        result |= 0x20;  // Negative zero
+        if (copysignf(1.0f, operand) < 0.0f) {
+            result |= 0x10;  // Sign bit
+        }
+    } else {
+        // Normal or subnormal
+        if (fpclassify(operand) == FP_SUBNORMAL) {
+            result |= 0x08;  // Subnormal
+        } else {
+            result |= 0x04;  // Normal
+        }
+        if (operand < 0.0f) {
+            result |= 0x02;  // Sign bit
+        }
+    }
+    
+    return result;
+}
+
 string CPU::disassemble_instruction(uint32_t instruction) const {
     unsigned int opcode = instruction & 0x7F;
     unsigned int rd = (instruction >> 7) & 0x1F;
@@ -1159,18 +1786,33 @@ string CPU::disassemble_instruction(uint32_t instruction) const {
     string args = "";
     
     switch (opcode) {
-        case 0x33: // R-type
-            switch (funct3) {
-                case 0x0:
-                    op = (funct7 == 0x00) ? "ADD" : "SUB";
-                    break;
-                case 0x4: op = "XOR"; break;
-                case 0x6: op = "OR"; break;
-                case 0x7: op = "AND"; break;
-                case 0x1: op = "SLL"; break;
-                case 0x5: op = (funct7 == 0x00) ? "SRL" : "SRA"; break;
-                case 0x2: op = "SLT"; break;
-                case 0x3: op = "SLTU"; break;
+        case 0x33: // R-type and M extension
+            // Check for M extension first (funct7=0x01)
+            if (funct7 == 0x01) {
+                switch (funct3) {
+                    case 0x0: op = "MUL"; break;
+                    case 0x1: op = "MULH"; break;
+                    case 0x2: op = "MULHSU"; break;
+                    case 0x3: op = "MULHU"; break;
+                    case 0x4: op = "DIV"; break;
+                    case 0x5: op = "DIVU"; break;
+                    case 0x6: op = "REM"; break;
+                    case 0x7: op = "REMU"; break;
+                }
+            } else {
+                // Standard RV32I R-type instructions
+                switch (funct3) {
+                    case 0x0:
+                        op = (funct7 == 0x00) ? "ADD" : "SUB";
+                        break;
+                    case 0x4: op = "XOR"; break;
+                    case 0x6: op = "OR"; break;
+                    case 0x7: op = "AND"; break;
+                    case 0x1: op = "SLL"; break;
+                    case 0x5: op = (funct7 == 0x00) ? "SRL" : "SRA"; break;
+                    case 0x2: op = "SLT"; break;
+                    case 0x3: op = "SLTU"; break;
+                }
             }
             args = REGISTER_NAMES[rd] + ", " + REGISTER_NAMES[rs1] + ", " + REGISTER_NAMES[rs2];
             break;
@@ -1234,9 +1876,192 @@ string CPU::disassemble_instruction(uint32_t instruction) const {
             op = "JALR";
             args = REGISTER_NAMES[rd] + ", " + std::to_string(generate_immediate(instruction, opcode)) + "(" + REGISTER_NAMES[rs1] + ")";
             break;
+            
+        case 0x07: // FLW - Load word to FP register
+            op = "FLW";
+            args = FP_REGISTER_NAMES[rd] + ", " + std::to_string(generate_immediate(instruction, opcode)) + "(" + REGISTER_NAMES[rs1] + ")";
+            break;
+            
+        case 0x27: // FSW - Store word from FP register
+            op = "FSW";
+            args = FP_REGISTER_NAMES[rs2] + ", " + std::to_string(generate_immediate(instruction, opcode)) + "(" + REGISTER_NAMES[rs1] + ")";
+            break;
+            
+        case 0x53: // FP arithmetic instructions
+            if (funct7 == 0x00) {
+                switch (funct3) {
+                    case 0x0: op = "FADD.S"; break;
+                    case 0x4: op = "FSUB.S"; break;
+                    case 0x8: op = "FMUL.S"; break;
+                    case 0xC: op = "FDIV.S"; break;
+                    case 0x10: op = "FSGNJ.S"; break;
+                    case 0x14: op = "FMIN.S"; break;
+                    case 0x18: op = "FMAX.S"; break;
+                    case 0x50: op = "FSQRT.S"; break;
+                    case 0x60: op = "FCVT.W.S"; break;
+                    case 0x68: op = "FCVT.S.W"; break;
+                    case 0x70: op = "FMV.X.W"; break;
+                    case 0x78: op = "FMV.W.X"; break;
+                }
+            } else if (funct7 == 0x50) {
+                switch (funct3) {
+                    case 0x0: op = "FLE.S"; break;
+                    case 0x1: op = "FLT.S"; break;
+                    case 0x2: op = "FEQ.S"; break;
+                }
+            } else if (funct7 == 0x70) {
+                if (funct3 == 0x0) {
+                    op = "FCLASS.S";
+                }
+            }
+            
+            // Format arguments based on instruction type
+            if (op == "FSQRT.S" || op == "FCVT.W.S" || op == "FMV.X.W" || op == "FCLASS.S") {
+                // Single operand instructions
+                if (op == "FCVT.W.S" || op == "FMV.X.W" || op == "FCLASS.S") {
+                    args = REGISTER_NAMES[rd] + ", " + FP_REGISTER_NAMES[rs1];
+                } else {
+                    args = FP_REGISTER_NAMES[rd] + ", " + FP_REGISTER_NAMES[rs1];
+                }
+            } else if (op == "FCVT.S.W" || op == "FMV.W.X") {
+                // Convert/move from integer register
+                args = FP_REGISTER_NAMES[rd] + ", " + REGISTER_NAMES[rs1];
+            } else if (op == "FLE.S" || op == "FLT.S" || op == "FEQ.S") {
+                // Comparison instructions write to integer register
+                args = REGISTER_NAMES[rd] + ", " + FP_REGISTER_NAMES[rs1] + ", " + FP_REGISTER_NAMES[rs2];
+            } else {
+                // Standard FP arithmetic (two FP operands, write to FP register)
+                args = FP_REGISTER_NAMES[rd] + ", " + FP_REGISTER_NAMES[rs1] + ", " + FP_REGISTER_NAMES[rs2];
+            }
+            break;
     }
     
     return op + " " + args;
+}
+
+string CPU::disassemble_compressed_instruction(uint16_t instruction) const {
+    uint8_t op = instruction & 0x3;
+    uint8_t funct3 = (instruction >> 13) & 0x7;
+    uint8_t rd_rs1 = (instruction >> 7) & 0x1F;
+    uint8_t rs2 = (instruction >> 2) & 0x1F;
+    
+    string op_name = "C.UNKNOWN";
+    string args = "";
+    
+    // Quadrant 0: 00
+    if (op == 0x0) {
+        if (funct3 == 0x0) {
+            op_name = "C.ADDI4SPN";
+            uint8_t rd_prime = 8 + ((instruction >> 2) & 0x7);
+            args = REGISTER_NAMES[rd_prime] + ", sp, " + std::to_string(((instruction >> 5) & 0x30) | ((instruction >> 7) & 0xC) | ((instruction >> 4) & 0x4) | ((instruction >> 2) & 0x8));
+        } else if (funct3 == 0x2) {
+            op_name = "C.LW";
+            uint8_t rd_prime = 8 + ((instruction >> 2) & 0x7);
+            uint8_t rs1_prime = 8 + ((instruction >> 7) & 0x7);
+            args = REGISTER_NAMES[rd_prime] + ", " + std::to_string(((instruction >> 5) & 0x20) | ((instruction >> 6) & 0x18) | ((instruction >> 2) & 0x4)) + "(" + REGISTER_NAMES[rs1_prime] + ")";
+        } else if (funct3 == 0x6) {
+            op_name = "C.SW";
+            uint8_t rs2_prime = 8 + ((instruction >> 2) & 0x7);
+            uint8_t rs1_prime = 8 + ((instruction >> 7) & 0x7);
+            args = REGISTER_NAMES[rs2_prime] + ", " + std::to_string(((instruction >> 5) & 0x20) | ((instruction >> 6) & 0x18) | ((instruction >> 2) & 0x4)) + "(" + REGISTER_NAMES[rs1_prime] + ")";
+        }
+    }
+    // Quadrant 1: 01
+    else if (op == 0x1) {
+        if (funct3 == 0x0) {
+            op_name = "C.ADDI";
+            int32_t imm = ((instruction >> 12) & 0x1) ? -32 : 0;
+            imm |= ((instruction >> 2) & 0x1F);
+            args = REGISTER_NAMES[rd_rs1] + ", " + REGISTER_NAMES[rd_rs1] + ", " + std::to_string(imm);
+        } else if (funct3 == 0x1) {
+            op_name = "C.JAL";
+            args = "offset";  // Simplified
+        } else if (funct3 == 0x2) {
+            op_name = "C.LI";
+            int32_t imm = ((instruction >> 12) & 0x1) ? -32 : 0;
+            imm |= ((instruction >> 2) & 0x1F);
+            args = REGISTER_NAMES[rd_rs1] + ", " + std::to_string(imm);
+        } else if (funct3 == 0x3) {
+            if (rd_rs1 == 2) {
+                op_name = "C.ADDI16SP";
+                args = "sp, sp, offset";  // Simplified
+            } else {
+                op_name = "C.LUI";
+                args = REGISTER_NAMES[rd_rs1] + ", offset";  // Simplified
+            }
+        } else if (funct3 == 0x4) {
+            uint8_t funct2 = (instruction >> 10) & 0x3;
+            uint8_t rd_prime = 8 + ((instruction >> 7) & 0x7);
+            if (funct2 == 0x0) {
+                op_name = "C.SRLI";
+                args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", " + std::to_string((instruction >> 2) & 0x1F);
+            } else if (funct2 == 0x1) {
+                op_name = "C.SRAI";
+                args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", " + std::to_string((instruction >> 2) & 0x1F);
+            } else if (funct2 == 0x2) {
+                op_name = "C.ANDI";
+                args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", imm";  // Simplified
+            } else if (funct2 == 0x3) {
+                uint8_t rs2_prime = 8 + ((instruction >> 2) & 0x7);
+                uint8_t funct6 = (instruction >> 10) & 0x3F;
+                if (funct6 == 0x23) {
+                    op_name = "C.SUB";
+                    args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rs2_prime];
+                } else if (funct6 == 0x27) {
+                    op_name = "C.XOR";
+                    args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rs2_prime];
+                } else if (funct6 == 0x26) {
+                    op_name = "C.OR";
+                    args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rs2_prime];
+                } else if (funct6 == 0x24) {
+                    op_name = "C.AND";
+                    args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rs2_prime];
+                }
+            }
+        } else if (funct3 == 0x5) {
+            op_name = "C.J";
+            args = "offset";  // Simplified
+        } else if (funct3 == 0x6) {
+            op_name = "C.BEQZ";
+            uint8_t rs1_prime = 8 + ((instruction >> 7) & 0x7);
+            args = REGISTER_NAMES[rs1_prime] + ", offset";  // Simplified
+        } else if (funct3 == 0x7) {
+            op_name = "C.BNEZ";
+            uint8_t rs1_prime = 8 + ((instruction >> 7) & 0x7);
+            args = REGISTER_NAMES[rs1_prime] + ", offset";  // Simplified
+        }
+    }
+    // Quadrant 2: 10
+    else if (op == 0x2) {
+        if (funct3 == 0x0) {
+            op_name = "C.SLLI";
+            args = REGISTER_NAMES[rd_rs1] + ", " + REGISTER_NAMES[rd_rs1] + ", " + std::to_string((instruction >> 2) & 0x1F);
+        } else if (funct3 == 0x2) {
+            op_name = "C.LWSP";
+            args = REGISTER_NAMES[rd_rs1] + ", offset(sp)";  // Simplified
+        } else if (funct3 == 0x4) {
+            if (rs2 == 0) {
+                op_name = "C.JR";
+                args = REGISTER_NAMES[rd_rs1];
+            } else {
+                op_name = "C.MV";
+                args = REGISTER_NAMES[rd_rs1] + ", " + REGISTER_NAMES[rs2];
+            }
+        } else if (funct3 == 0x5) {
+            if (rs2 == 0) {
+                op_name = "C.JALR";
+                args = REGISTER_NAMES[rd_rs1];
+            } else {
+                op_name = "C.ADD";
+                args = REGISTER_NAMES[rd_rs1] + ", " + REGISTER_NAMES[rd_rs1] + ", " + REGISTER_NAMES[rs2];
+            }
+        } else if (funct3 == 0x6) {
+            op_name = "C.SWSP";
+            args = REGISTER_NAMES[rs2] + ", offset(sp)";  // Simplified
+        }
+    }
+    
+    return op_name + " " + args;
 }
 
 void CPU::log_pipeline_state(int cycle, bool had_stall, bool had_flush) {

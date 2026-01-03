@@ -21,7 +21,9 @@ struct IF_ID_Register {
     uint32_t instruction;
     uint32_t pc;
     bool valid;
-    IF_ID_Register() : instruction(0), pc(0), valid(false) {}
+    bool is_compressed;  // Track if instruction is 16-bit compressed
+    uint16_t compressed_inst;  // Store original compressed instruction for disassembly
+    IF_ID_Register() : instruction(0), pc(0), valid(false), is_compressed(false), compressed_inst(0) {}
 };
 
 struct ID_EX_Register {
@@ -34,10 +36,16 @@ struct ID_EX_Register {
     bool memToReg;
     bool upperIm;
     int aluOp;
-    // Loads: 1=LB, 2=LBU, 3=LH, 4=LHU, 5=LW
-    // Stores: 1=SB, 2=SH, 3=SW
+    // Loads: 1=LB, 2=LBU, 3=LH, 4=LHU, 5=LW, 6=FLW
+    // Stores: 1=SB, 2=SH, 3=SW, 4=FSW
     int memReadType;
     int memWriteType;
+    
+    // Floating-point control signals
+    bool fpRegWrite;  // Write to FP register
+    bool fpRegRead1;  // Read from FP register rs1
+    bool fpRegRead2;  // Read from FP register rs2
+    int fpOp;  // FP operation code
 
     // Instruction fields
     unsigned int opcode;
@@ -51,14 +59,18 @@ struct ID_EX_Register {
     int32_t rs1_data;
     int32_t rs2_data;
     int32_t immediate;
+    float rs1_fp_data;  // FP register rs1 data
+    float rs2_fp_data;  // FP register rs2 data
     uint32_t pc;
     bool valid;
 
     ID_EX_Register() : regWrite(false), aluSrc(false), branch(false), memRe(false),
                       memWr(false), memToReg(false), upperIm(false), aluOp(0),
                       memReadType(0), memWriteType(0),
+                      fpRegWrite(false), fpRegRead1(false), fpRegRead2(false), fpOp(0),
                       opcode(0), rd(0), funct3(0), rs1(0), rs2(0), funct7(0),
-                      rs1_data(0), rs2_data(0), immediate(0), pc(0), valid(false) {}
+                      rs1_data(0), rs2_data(0), immediate(0), rs1_fp_data(0.0f), rs2_fp_data(0.0f),
+                      pc(0), valid(false) {}
 };
 
 struct EX_MEM_Register {
@@ -68,21 +80,32 @@ struct EX_MEM_Register {
     bool memToReg;
     int memReadType;
     int memWriteType;
+    
+    // Floating-point control signals
+    bool fpRegWrite;
+    float fp_result;  // FP operation result
 
     int32_t alu_result;
     int32_t rs2_data;
+    float rs2_fp_data;  // FP register rs2 data for stores
     unsigned int rd;
     uint32_t pc;
     bool valid;
 
     EX_MEM_Register() : regWrite(false), memRe(false), memWr(false), memToReg(false),
                        memReadType(0), memWriteType(0),
-                       alu_result(0), rs2_data(0), rd(0), pc(0), valid(false) {}
+                       fpRegWrite(false), fp_result(0.0f),
+                       alu_result(0), rs2_data(0), rs2_fp_data(0.0f), rd(0), pc(0), valid(false) {}
 };
 
 struct MEM_WB_Register {
     bool regWrite;
     bool memToReg;
+    
+    // Floating-point control signals
+    bool fpRegWrite;
+    float fp_result;
+    float mem_fp_data;  // FP data loaded from memory
 
     int32_t alu_result;
     int32_t mem_data;
@@ -91,6 +114,7 @@ struct MEM_WB_Register {
     bool valid;
 
     MEM_WB_Register() : regWrite(false), memToReg(false),
+                       fpRegWrite(false), fp_result(0.0f), mem_fp_data(0.0f),
                        alu_result(0), mem_data(0), rd(0), pc(0), valid(false) {}
 };
 
@@ -265,10 +289,16 @@ private:
 
     unsigned long PC; //pc 
     int32_t registers[32];
+    float registers_fp[32];  // Floating-point registers (f0-f31)
+    uint32_t fcsr;  // Floating-Point Control and Status Register
     const string REGISTER_NAMES[32] = {"Zero","ra","sp","gp","tp","t0","t1","t2",
                                     "s0/fp","s1","a0","a1","a2","a3","a4","a5",
                                     "a6","a7","s2","s3","s4","s5","s6","s7",
                                     "s8","s9","s10","s11","t3","t4","t5","t6"};
+    const string FP_REGISTER_NAMES[32] = {"ft0","ft1","ft2","ft3","ft4","ft5","ft6","ft7",
+                                         "fs0","fs1","fa0","fa1","fa2","fa3","fa4","fa5",
+                                         "fa6","fa7","fs2","fs3","fs4","fs5","fs6","fs7",
+                                         "fs8","fs9","fs10","fs11","ft8","ft9","ft10","ft11"};
     ALU alu;
 
     // Pipeline registers
@@ -331,19 +361,30 @@ private:
 
     // Helper methods
     string disassemble_instruction(uint32_t instruction) const;
+    string disassemble_compressed_instruction(uint16_t instruction) const;
     void log_pipeline_state(int cycle, bool had_stall, bool had_flush);
     void log_instruction_disassembly(uint32_t instruction, uint32_t pc);
 
     int32_t generate_immediate(uint32_t instruction, int opcode) const;
     int32_t sign_extend(int32_t value, int bits) const;
     bool check_address_alignment(uint32_t address, uint32_t bytes);
+    
+    // Compressed instruction support
+    uint32_t expand_compressed_instruction(uint16_t compressed_inst) const;
+    bool is_compressed_instruction(uint16_t inst) const;
+    
+    // Floating-point unit operations
+    float execute_fp_operation(float operand1, float operand2, int fpOp) const;
+    int32_t execute_fp_compare(float operand1, float operand2, int fpOp) const;
+    int32_t execute_fp_classify(float operand) const;
 
 public:
     CPU();
     ~CPU();
     unsigned long readPC();
-    void incPC();
+    void incPC(int increment = 4);
     string get_instruction(char *IM);
+    string get_instruction_16bit(char *IM);  // Get 16-bit instruction
     int get_register_value(int reg);
     bool decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *branch, bool *memRe, bool *memWr, bool *memToReg, bool *upperIm, int *aluOp,
         unsigned int *opcode, unsigned int *rd, unsigned int *funct3, unsigned int *rs1, unsigned int *rs2, unsigned int *funct7, bool debug=false);
