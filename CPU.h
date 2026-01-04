@@ -62,6 +62,9 @@ struct ID_EX_Register {
     float rs1_fp_data;  // FP register rs1 data
     float rs2_fp_data;  // FP register rs2 data
     uint32_t pc;
+    uint32_t instruction;  // Store the instruction for disassembly
+    bool is_compressed;    // Whether this was a compressed instruction
+    uint16_t compressed_inst;  // Original compressed instruction if applicable
     bool valid;
 
     ID_EX_Register() : regWrite(false), aluSrc(false), branch(false), memRe(false),
@@ -70,7 +73,7 @@ struct ID_EX_Register {
                       fpRegWrite(false), fpRegRead1(false), fpRegRead2(false), fpOp(0),
                       opcode(0), rd(0), funct3(0), rs1(0), rs2(0), funct7(0),
                       rs1_data(0), rs2_data(0), immediate(0), rs1_fp_data(0.0f), rs2_fp_data(0.0f),
-                      pc(0), valid(false) {}
+                      pc(0), instruction(0), is_compressed(false), compressed_inst(0), valid(false) {}
 };
 
 struct EX_MEM_Register {
@@ -90,12 +93,16 @@ struct EX_MEM_Register {
     float rs2_fp_data;  // FP register rs2 data for stores
     unsigned int rd;
     uint32_t pc;
+    uint32_t instruction;  // Store the instruction for disassembly
+    bool is_compressed;    // Whether this was a compressed instruction
+    uint16_t compressed_inst;  // Original compressed instruction if applicable
     bool valid;
 
     EX_MEM_Register() : regWrite(false), memRe(false), memWr(false), memToReg(false),
                        memReadType(0), memWriteType(0),
                        fpRegWrite(false), fp_result(0.0f),
-                       alu_result(0), rs2_data(0), rs2_fp_data(0.0f), rd(0), pc(0), valid(false) {}
+                       alu_result(0), rs2_data(0), rs2_fp_data(0.0f), rd(0), pc(0),
+                       instruction(0), is_compressed(false), compressed_inst(0), valid(false) {}
 };
 
 struct MEM_WB_Register {
@@ -111,11 +118,15 @@ struct MEM_WB_Register {
     int32_t mem_data;
     unsigned int rd;
     uint32_t pc;
+    uint32_t instruction;  // Store the instruction for disassembly
+    bool is_compressed;    // Whether this was a compressed instruction
+    uint16_t compressed_inst;  // Original compressed instruction if applicable
     bool valid;
 
     MEM_WB_Register() : regWrite(false), memToReg(false),
                        fpRegWrite(false), fp_result(0.0f), mem_fp_data(0.0f),
-                       alu_result(0), mem_data(0), rd(0), pc(0), valid(false) {}
+                       alu_result(0), mem_data(0), rd(0), pc(0),
+                       instruction(0), is_compressed(false), compressed_inst(0), valid(false) {}
 };
 
 // Pipeline snapshot for GUI visualization

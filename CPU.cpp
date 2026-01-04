@@ -130,9 +130,9 @@ string CPU::get_instruction_16bit(char *IM) {
 		return "0000";
 	}
 	// Read 2 bytes (4 hex chars) in little-endian format
-	// Following the same pattern as 32-bit: high byte first, then low byte
-	// Memory layout: [byte0_low, byte0_high, byte1_low, byte1_high]
-	// String should be: byte1_high byte1_low byte0_high byte0_low
+	// Memory layout in string: [byte0_high, byte0_low, byte1_high, byte1_low]
+	// For little-endian 16-bit instruction, we want: byte1_high byte1_low byte0_high byte0_low
+	// So read byte1 first, then byte0
 	inst += IM[PC*2 + 2];  // byte1 high nibble
 	inst += IM[PC*2 + 3];  // byte1 low nibble
 	inst += IM[PC*2];      // byte0 high nibble
@@ -755,23 +755,23 @@ void CPU::instruction_fetch(char* instMem, bool debug) {
         incPC(2);  // Increment PC by 2 for compressed instruction
     } else {
         // It's a 32-bit instruction
-        string inst_str = get_instruction(instMem);
-        if (inst_str == "00000000") {
-            if_id.valid = false;
-            if (debug) { std::cout << "IF: NOP instruction (all zeros)" << std::endl; }
-            return;
-        }
-        if_id.instruction = std::stoul(inst_str, nullptr, 16);
+    string inst_str = get_instruction(instMem);
+    if (inst_str == "00000000") {
+        if_id.valid = false;
+        if (debug) { std::cout << "IF: NOP instruction (all zeros)" << std::endl; }
+        return;
+    }
+    if_id.instruction = std::stoul(inst_str, nullptr, 16);
         if_id.is_compressed = false;
         if_id.compressed_inst = 0;
-        if_id.pc = PC;
-        if_id.valid = true;
+    if_id.pc = PC;
+    if_id.valid = true;
 
-        if (debug) {
-            std::cout << "IF: Fetched instruction 0x" << std::hex << if_id.instruction 
-                      << " at PC 0x" << if_id.pc << std::dec << std::endl;
-            std::cout << "IF: Raw instruction string: " << inst_str << std::endl;
-        }
+    if (debug) {
+        std::cout << "IF: Fetched instruction 0x" << std::hex << if_id.instruction 
+                  << " at PC 0x" << if_id.pc << std::dec << std::endl;
+        std::cout << "IF: Raw instruction string: " << inst_str << std::endl;
+    }
         incPC(4);  // Increment PC by 4 for 32-bit instruction
     }
 }
@@ -910,6 +910,9 @@ void CPU::instruction_decode(bool debug) {
     id_ex.rs2_fp_data = rs2_fp_data;
     id_ex.immediate = immediate;
     id_ex.pc = if_id.pc;
+    id_ex.instruction = if_id.instruction;
+    id_ex.is_compressed = if_id.is_compressed;
+    id_ex.compressed_inst = if_id.compressed_inst;
     id_ex.valid = true;
 
     // Track instruction dependencies
@@ -1029,6 +1032,9 @@ void CPU::execute_stage(bool debug) {
         ex_mem.rs2_data   = 0;
         ex_mem.rd         = id_ex.rd;
         ex_mem.pc         = id_ex.pc;
+        ex_mem.instruction = id_ex.instruction;
+        ex_mem.is_compressed = id_ex.is_compressed;
+        ex_mem.compressed_inst = id_ex.compressed_inst;
         ex_mem.valid      = true;
 
         uint32_t target_pc = id_ex.pc + id_ex.immediate;
@@ -1060,6 +1066,9 @@ void CPU::execute_stage(bool debug) {
         ex_mem.rs2_data   = 0;
         ex_mem.rd         = id_ex.rd;
         ex_mem.pc         = id_ex.pc;
+        ex_mem.instruction = id_ex.instruction;
+        ex_mem.is_compressed = id_ex.is_compressed;
+        ex_mem.compressed_inst = id_ex.compressed_inst;
         ex_mem.valid      = true;
 
         PC = static_cast<uint32_t>(target);
@@ -1171,6 +1180,9 @@ void CPU::execute_stage(bool debug) {
     ex_mem.rs2_fp_data = forwarded_rs2_fp_data;
     ex_mem.rd = id_ex.rd;
     ex_mem.pc = id_ex.pc;
+    ex_mem.instruction = id_ex.instruction;
+    ex_mem.is_compressed = id_ex.is_compressed;
+    ex_mem.compressed_inst = id_ex.compressed_inst;
     ex_mem.valid = true;
 
     if (debug) {
@@ -1218,7 +1230,7 @@ void CPU::memory_stage(bool debug) {
             uint32_t bits = static_cast<uint32_t>(mem_data);
             memcpy(&mem_fp_data, &bits, sizeof(float));
         } else {
-            mem_data = read_memory(ex_mem.alu_result, ex_mem.memReadType);
+        mem_data = read_memory(ex_mem.alu_result, ex_mem.memReadType);
         }
         stats_.memory_reads++;
         
@@ -1240,7 +1252,7 @@ void CPU::memory_stage(bool debug) {
             if (ex_mem.memReadType == 6) {
                 std::cout << "MEM: FLW from address " << ex_mem.alu_result << " = " << mem_fp_data << std::endl;
             } else {
-                std::cout << "MEM: Load from address " << ex_mem.alu_result << " = " << mem_data << std::endl;
+            std::cout << "MEM: Load from address " << ex_mem.alu_result << " = " << mem_data << std::endl;
             }
         }
     } else if (ex_mem.memWr) {
@@ -1254,7 +1266,7 @@ void CPU::memory_stage(bool debug) {
             memcpy(&bits, &ex_mem.rs2_fp_data, sizeof(float));
             write_memory(ex_mem.alu_result, static_cast<int32_t>(bits), 3);  // Use SW write type
         } else {
-            write_memory(ex_mem.alu_result, ex_mem.rs2_data, ex_mem.memWriteType);
+        write_memory(ex_mem.alu_result, ex_mem.rs2_data, ex_mem.memWriteType);
         }
         stats_.memory_writes++;
         
@@ -1284,6 +1296,9 @@ void CPU::memory_stage(bool debug) {
     mem_wb.mem_data = mem_data;
     mem_wb.rd = ex_mem.rd;
     mem_wb.pc = ex_mem.pc;
+    mem_wb.instruction = ex_mem.instruction;
+    mem_wb.is_compressed = ex_mem.is_compressed;
+    mem_wb.compressed_inst = ex_mem.compressed_inst;
     mem_wb.valid = true;
 }
 
@@ -1592,17 +1607,21 @@ uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
             }
         } else if (funct3 == 0x5) {
             // C.J: jal x0, offset[11:1]
-            int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFF000 : 0; // sign bit
-            imm |= ((compressed_inst >> 2) & 0x100) |  // bit [10]
-                   ((compressed_inst >> 3) & 0x80) |   // bit [9]
-                   ((compressed_inst >> 6) & 0x40) |   // bit [8]
-                   ((compressed_inst >> 7) & 0x20) |   // bit [7]
-                   ((compressed_inst >> 8) & 0x10) |   // bit [6]
-                   ((compressed_inst >> 9) & 0x8) |    // bit [5]
-                   ((compressed_inst >> 10) & 0x4) |   // bit [4]
-                   ((compressed_inst >> 11) & 0x2) |   // bit [3]
-                   ((compressed_inst >> 5) & 0x1);     // bit [2]
-            imm <<= 1; // Scale by 2
+            // C.J immediate encoding: imm[11|4|9:8|10|6|7|3:1|5]
+            // Bits in instruction: [12|6|10:9|11|7|8|5:3|2]
+            int32_t imm = ((compressed_inst >> 12) & 0x1) << 11 |  // imm[11] from bit [12]
+                   ((compressed_inst >> 6) & 0x1) << 4 |   // imm[4] from bit [6]
+                   ((compressed_inst >> 10) & 0x3) << 8 |   // imm[9:8] from bits [10:9]
+                   ((compressed_inst >> 11) & 0x1) << 10 |  // imm[10] from bit [11]
+                   ((compressed_inst >> 7) & 0x1) << 6 |   // imm[6] from bit [7]
+                   ((compressed_inst >> 8) & 0x1) << 7 |   // imm[7] from bit [8]
+                   ((compressed_inst >> 5) & 0x7) << 1 |    // imm[3:1] from bits [5:3]
+                   ((compressed_inst >> 2) & 0x1) << 5;    // imm[5] from bit [2]
+            // Sign extend
+            if (imm & 0x800) {
+                imm |= 0xFFFFF000;
+            }
+            imm <<= 1; // Scale by 2 (offset is in units of 2 bytes)
             // JAL x0, imm
             return (0x6F) | (0x00 << 7) | ((imm & 0x7FE) << 20) | ((imm & 0x800) << 12) | ((imm & 0xFF000) << 12) | ((imm & 0x100000) << 31);
         } else if (funct3 == 0x6) {
@@ -1801,17 +1820,17 @@ string CPU::disassemble_instruction(uint32_t instruction) const {
                 }
             } else {
                 // Standard RV32I R-type instructions
-                switch (funct3) {
-                    case 0x0:
-                        op = (funct7 == 0x00) ? "ADD" : "SUB";
-                        break;
-                    case 0x4: op = "XOR"; break;
-                    case 0x6: op = "OR"; break;
-                    case 0x7: op = "AND"; break;
-                    case 0x1: op = "SLL"; break;
-                    case 0x5: op = (funct7 == 0x00) ? "SRL" : "SRA"; break;
-                    case 0x2: op = "SLT"; break;
-                    case 0x3: op = "SLTU"; break;
+            switch (funct3) {
+                case 0x0:
+                    op = (funct7 == 0x00) ? "ADD" : "SUB";
+                    break;
+                case 0x4: op = "XOR"; break;
+                case 0x6: op = "OR"; break;
+                case 0x7: op = "AND"; break;
+                case 0x1: op = "SLL"; break;
+                case 0x5: op = (funct7 == 0x00) ? "SRL" : "SRA"; break;
+                case 0x2: op = "SLT"; break;
+                case 0x3: op = "SLTU"; break;
                 }
             }
             args = REGISTER_NAMES[rd] + ", " + REGISTER_NAMES[rs1] + ", " + REGISTER_NAMES[rs2];
@@ -2073,8 +2092,17 @@ void CPU::log_pipeline_state(int cycle, bool had_stall, bool had_flush) {
     // Log IF/ID register
     log_file << "IF/ID: ";
     if (if_id.valid) {
+        string if_id_disasm = "";
+        if (if_id.is_compressed && if_id.compressed_inst != 0) {
+            if_id_disasm = disassemble_compressed_instruction(if_id.compressed_inst) + 
+                           " [expanded: " + disassemble_instruction(if_id.instruction) + "]";
+        } else if (if_id.instruction != 0) {
+            if_id_disasm = disassemble_instruction(if_id.instruction);
+        } else {
+            if_id_disasm = "UNKNOWN";
+        }
         log_file << "PC=0x" << std::hex << if_id.pc << ", Inst=0x" << if_id.instruction 
-                 << " (" << disassemble_instruction(if_id.instruction) << ")" << std::dec;
+                 << " (" << if_id_disasm << ")" << std::dec;
     } else {
         log_file << "Empty";
     }
@@ -2084,8 +2112,13 @@ void CPU::log_pipeline_state(int cycle, bool had_stall, bool had_flush) {
     log_file << "ID/EX: ";
     if (id_ex.valid) {
         string id_ex_disasm = "";
-        if (if_id.valid && if_id.pc == id_ex.pc) {
-            id_ex_disasm = disassemble_instruction(if_id.instruction);
+        if (id_ex.instruction != 0) {
+            if (id_ex.is_compressed) {
+                id_ex_disasm = disassemble_compressed_instruction(id_ex.compressed_inst) + 
+                               " [expanded: " + disassemble_instruction(id_ex.instruction) + "]";
+            } else {
+                id_ex_disasm = disassemble_instruction(id_ex.instruction);
+            }
         }
         log_file << "PC=0x" << std::hex << id_ex.pc 
                  << " (" << id_ex_disasm << ")"
@@ -2160,17 +2193,37 @@ void CPU::capture_pipeline_snapshot(int cycle, bool had_stall, bool had_flush) {
     snapshot.if_id.pc = if_id.pc;
     snapshot.if_id.instruction = if_id.instruction;
     if (if_id.valid && if_id.instruction != 0) {
-        snapshot.if_id.disassembly = disassemble_instruction(if_id.instruction);
+        if (if_id.is_compressed && if_id.compressed_inst != 0) {
+            // Show compressed instruction with expanded form
+            snapshot.if_id.disassembly = disassemble_compressed_instruction(if_id.compressed_inst) + 
+                                         " [expanded: " + disassemble_instruction(if_id.instruction) + "]";
+        } else {
+            snapshot.if_id.disassembly = disassemble_instruction(if_id.instruction);
+        }
     } else if (if_id.instruction != 0) {
         // Even if not valid (flushed), still disassemble if we have the instruction
-        snapshot.if_id.disassembly = disassemble_instruction(if_id.instruction);
+        if (if_id.is_compressed && if_id.compressed_inst != 0) {
+            snapshot.if_id.disassembly = disassemble_compressed_instruction(if_id.compressed_inst) + 
+                                         " [expanded: " + disassemble_instruction(if_id.instruction) + "]";
+        } else {
+            snapshot.if_id.disassembly = disassemble_instruction(if_id.instruction);
+        }
     }
     
     // Capture ID/EX stage
     snapshot.id_ex.valid = id_ex.valid;
     snapshot.id_ex.pc = id_ex.pc;
     if (id_ex.valid) {
-        snapshot.id_ex.disassembly = disassemble_instruction(if_id.instruction); // Use IF/ID instruction
+        if (id_ex.instruction != 0) {
+            if (id_ex.is_compressed) {
+                snapshot.id_ex.disassembly = disassemble_compressed_instruction(id_ex.compressed_inst) + 
+                                            " [expanded: " + disassemble_instruction(id_ex.instruction) + "]";
+            } else {
+                snapshot.id_ex.disassembly = disassemble_instruction(id_ex.instruction);
+            }
+        } else {
+            snapshot.id_ex.disassembly = "UNKNOWN";
+        }
         // Extract opcode name
         unsigned int opcode = id_ex.opcode;
         switch (opcode) {
@@ -2190,20 +2243,18 @@ void CPU::capture_pipeline_snapshot(int cycle, bool had_stall, bool had_flush) {
     snapshot.ex_mem.pc = ex_mem.pc;
     snapshot.ex_mem.alu_result = ex_mem.alu_result;
     if (ex_mem.valid) {
-        // Look up instruction disassembly from pipeline trace history using PC
-        snapshot.ex_mem.disassembly = "";
-        for (auto it = pipeline_trace_.rbegin(); it != pipeline_trace_.rend() && it->cycle >= cycle - 10; ++it) {
-            if (it->id_ex.valid && it->id_ex.pc == ex_mem.pc) {
-                snapshot.ex_mem.disassembly = it->id_ex.disassembly;
-                break;
+        if (ex_mem.is_compressed && ex_mem.compressed_inst != 0) {
+            // Always disassemble compressed instruction, even if expansion returned 0 (reserved)
+            if (ex_mem.instruction != 0) {
+                snapshot.ex_mem.disassembly = disassemble_compressed_instruction(ex_mem.compressed_inst) + 
+                                               " [expanded: " + disassemble_instruction(ex_mem.instruction) + "]";
+            } else {
+                snapshot.ex_mem.disassembly = disassemble_compressed_instruction(ex_mem.compressed_inst) + " [reserved]";
             }
-            if (it->if_id.valid && it->if_id.pc == ex_mem.pc) {
-                snapshot.ex_mem.disassembly = it->if_id.disassembly;
-                break;
-            }
-        }
-        if (snapshot.ex_mem.disassembly.empty()) {
-        snapshot.ex_mem.disassembly = "EX/MEM";
+        } else if (ex_mem.instruction != 0) {
+            snapshot.ex_mem.disassembly = disassemble_instruction(ex_mem.instruction);
+        } else {
+            snapshot.ex_mem.disassembly = "UNKNOWN";
         }
     }
     
@@ -2212,24 +2263,18 @@ void CPU::capture_pipeline_snapshot(int cycle, bool had_stall, bool had_flush) {
     snapshot.mem_wb.pc = mem_wb.pc;
     snapshot.mem_wb.write_data = mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result;
     if (mem_wb.valid) {
-        // Look up instruction disassembly from pipeline trace history using PC
-        snapshot.mem_wb.disassembly = "";
-        for (auto it = pipeline_trace_.rbegin(); it != pipeline_trace_.rend() && it->cycle >= cycle - 10; ++it) {
-            if (it->ex_mem.valid && it->ex_mem.pc == mem_wb.pc) {
-                snapshot.mem_wb.disassembly = it->ex_mem.disassembly;
-                break;
+        if (mem_wb.is_compressed && mem_wb.compressed_inst != 0) {
+            // Always disassemble compressed instruction, even if expansion returned 0 (reserved)
+            if (mem_wb.instruction != 0) {
+                snapshot.mem_wb.disassembly = disassemble_compressed_instruction(mem_wb.compressed_inst) + 
+                                               " [expanded: " + disassemble_instruction(mem_wb.instruction) + "]";
+            } else {
+                snapshot.mem_wb.disassembly = disassemble_compressed_instruction(mem_wb.compressed_inst) + " [reserved]";
             }
-            if (it->id_ex.valid && it->id_ex.pc == mem_wb.pc) {
-                snapshot.mem_wb.disassembly = it->id_ex.disassembly;
-                break;
-            }
-            if (it->if_id.valid && it->if_id.pc == mem_wb.pc) {
-                snapshot.mem_wb.disassembly = it->if_id.disassembly;
-                break;
-            }
-        }
-        if (snapshot.mem_wb.disassembly.empty()) {
-        snapshot.mem_wb.disassembly = "MEM/WB";
+        } else if (mem_wb.instruction != 0) {
+            snapshot.mem_wb.disassembly = disassemble_instruction(mem_wb.instruction);
+        } else {
+            snapshot.mem_wb.disassembly = "UNKNOWN";
         }
     }
     
@@ -2247,25 +2292,72 @@ PipelineSnapshot CPU::get_current_pipeline_state(int cycle) const {
     snapshot.if_id.pc = if_id.pc;
     snapshot.if_id.instruction = if_id.instruction;
     if (if_id.valid) {
-        snapshot.if_id.disassembly = disassemble_instruction(if_id.instruction);
+        if (if_id.is_compressed && if_id.compressed_inst != 0) {
+            // Show compressed instruction with expanded form
+            snapshot.if_id.disassembly = disassemble_compressed_instruction(if_id.compressed_inst) + 
+                                         " [expanded: " + disassemble_instruction(if_id.instruction) + "]";
+        } else if (if_id.instruction != 0) {
+            snapshot.if_id.disassembly = disassemble_instruction(if_id.instruction);
+        } else {
+            snapshot.if_id.disassembly = "UNKNOWN";
+        }
     }
     
     // Capture current ID/EX stage
     snapshot.id_ex.valid = id_ex.valid;
     snapshot.id_ex.pc = id_ex.pc;
     if (id_ex.valid) {
-        snapshot.id_ex.disassembly = disassemble_instruction(if_id.instruction);
+        if (id_ex.instruction != 0) {
+            if (id_ex.is_compressed) {
+                snapshot.id_ex.disassembly = disassemble_compressed_instruction(id_ex.compressed_inst) + 
+                                            " [expanded: " + disassemble_instruction(id_ex.instruction) + "]";
+            } else {
+                snapshot.id_ex.disassembly = disassemble_instruction(id_ex.instruction);
+            }
+        } else {
+            snapshot.id_ex.disassembly = "UNKNOWN";
+        }
     }
-    
+
     // Capture current EX/MEM stage
     snapshot.ex_mem.valid = ex_mem.valid;
     snapshot.ex_mem.pc = ex_mem.pc;
     snapshot.ex_mem.alu_result = ex_mem.alu_result;
+    if (ex_mem.valid) {
+        if (ex_mem.is_compressed && ex_mem.compressed_inst != 0) {
+            // Always disassemble compressed instruction, even if expansion returned 0 (reserved)
+            if (ex_mem.instruction != 0) {
+                snapshot.ex_mem.disassembly = disassemble_compressed_instruction(ex_mem.compressed_inst) + 
+                                               " [expanded: " + disassemble_instruction(ex_mem.instruction) + "]";
+            } else {
+                snapshot.ex_mem.disassembly = disassemble_compressed_instruction(ex_mem.compressed_inst) + " [reserved]";
+            }
+        } else if (ex_mem.instruction != 0) {
+            snapshot.ex_mem.disassembly = disassemble_instruction(ex_mem.instruction);
+        } else {
+            snapshot.ex_mem.disassembly = "UNKNOWN";
+        }
+    }
     
     // Capture current MEM/WB stage
     snapshot.mem_wb.valid = mem_wb.valid;
     snapshot.mem_wb.pc = mem_wb.pc;
     snapshot.mem_wb.write_data = mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result;
+    if (mem_wb.valid) {
+        if (mem_wb.is_compressed && mem_wb.compressed_inst != 0) {
+            // Always disassemble compressed instruction, even if expansion returned 0 (reserved)
+            if (mem_wb.instruction != 0) {
+                snapshot.mem_wb.disassembly = disassemble_compressed_instruction(mem_wb.compressed_inst) + 
+                                               " [expanded: " + disassemble_instruction(mem_wb.instruction) + "]";
+            } else {
+                snapshot.mem_wb.disassembly = disassemble_compressed_instruction(mem_wb.compressed_inst) + " [reserved]";
+            }
+        } else if (mem_wb.instruction != 0) {
+            snapshot.mem_wb.disassembly = disassemble_instruction(mem_wb.instruction);
+        } else {
+            snapshot.mem_wb.disassembly = "UNKNOWN";
+        }
+    }
     
     return snapshot;
 }
