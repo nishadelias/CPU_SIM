@@ -55,3 +55,8 @@ target_link_libraries(cpusim_gui
 # Include directories
 target_include_directories(cpusim_gui PRIVATE .)
 
+# Executable for command-line version
+add_executable(cpusim
+    ${CPU_SOURCES}
+    cpusim.cpp
+)

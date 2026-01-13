@@ -746,7 +746,8 @@ void CPU::instruction_fetch(char* instMem, bool debug) {
         // Expand to 32-bit equivalent
         if_id.instruction = expand_compressed_instruction(inst_16);
         if_id.pc = PC;
-        if_id.valid = true;
+        // Only mark as valid if expansion succeeded (non-zero result)
+        if_id.valid = (if_id.instruction != 0);
         
         if (debug) {
             std::cout << "IF: Fetched compressed instruction 0x" << std::hex << inst_16 
@@ -1473,35 +1474,35 @@ uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
     if (op == 0x0) {
         if (funct3 == 0x0) {
             // C.ADDI4SPN: addi rd', x2, nzuimm[9:2]
-            // rd' = 8 + rd_rs1[4:2], rs1 = x2, imm = {nzuimm[5:4], nzuimm[9:6], nzuimm[2], nzuimm[3], 2'b0}
+            // nzuimm[9:6] are in bits [10:7], nzuimm[5:4] in bits [12:11], nzuimm[3] in bit [5], nzuimm[2] in bit [6]
             uint8_t rd_prime = 8 + ((compressed_inst >> 2) & 0x7);
-            uint32_t imm = ((compressed_inst >> 5) & 0x30) |  // bits [5:4]
-                          ((compressed_inst >> 7) & 0xC) |   // bits [9:8]
-                          ((compressed_inst >> 4) & 0x4) |    // bit [6]
-                          ((compressed_inst >> 2) & 0x8);    // bit [7]
+            uint32_t imm = ((compressed_inst >> 7) & 0xF) << 6 |  // nzuimm[9:6] from bits [10:7]
+                          ((compressed_inst >> 11) & 0x3) << 4 |  // nzuimm[5:4] from bits [12:11]
+                          ((compressed_inst >> 5) & 0x1) << 3 |   // nzuimm[3] from bit [5]
+                          ((compressed_inst >> 6) & 0x1) << 2;    // nzuimm[2] from bit [6]
             if (imm == 0) return 0; // Reserved encoding
             imm <<= 2; // Scale by 4
             // ADDI rd', x2, imm
             return (0x13) | (rd_prime << 7) | (0x02 << 15) | ((imm & 0xFFF) << 20);
         } else if (funct3 == 0x2) {
             // C.LW: lw rd', offset[6:2](rs1')
-            // rd' = 8 + rd_rs1[4:2], rs1' = 8 + rd_rs1[7:5]
+            // uimm[5:3] in bits [12:10], uimm[2|6] in bits [6:5] (uimm[6] is MSB, uimm[2] is LSB)
             uint8_t rd_prime = 8 + ((compressed_inst >> 2) & 0x7);
             uint8_t rs1_prime = 8 + ((compressed_inst >> 7) & 0x7);
-            uint32_t imm = ((compressed_inst >> 5) & 0x20) |  // bit [5]
-                          ((compressed_inst >> 6) & 0x18) |   // bits [4:3]
-                          ((compressed_inst >> 2) & 0x4);     // bit [2]
+            uint32_t imm = ((compressed_inst >> 10) & 0x7) << 3 |  // uimm[5:3] from bits [12:10]
+                          ((compressed_inst >> 6) & 0x1) << 6 |      // uimm[6] from bit [6]
+                          ((compressed_inst >> 5) & 0x1) << 2;        // uimm[2] from bit [5]
             imm <<= 2; // Scale by 4
             // LW rd', imm(rs1')
             return (0x03) | (rd_prime << 7) | (0x2 << 12) | (rs1_prime << 15) | ((imm & 0xFFF) << 20);
         } else if (funct3 == 0x6) {
             // C.SW: sw rs2', offset[6:2](rs1')
-            // rs2' = 8 + rs2[4:2], rs1' = 8 + rs2[7:5]
+            // uimm[5:3] in bits [12:10], uimm[2|6] in bits [6:5] (uimm[6] is MSB, uimm[2] is LSB)
             uint8_t rs2_prime = 8 + ((compressed_inst >> 2) & 0x7);
             uint8_t rs1_prime = 8 + ((compressed_inst >> 7) & 0x7);
-            uint32_t imm = ((compressed_inst >> 5) & 0x20) |  // bit [5]
-                          ((compressed_inst >> 6) & 0x18) |   // bits [4:3]
-                          ((compressed_inst >> 2) & 0x4);     // bit [2]
+            uint32_t imm = ((compressed_inst >> 10) & 0x7) << 3 |  // uimm[5:3] from bits [12:10]
+                          ((compressed_inst >> 6) & 0x1) << 6 |      // uimm[6] from bit [6]
+                          ((compressed_inst >> 5) & 0x1) << 2;        // uimm[2] from bit [5]
             imm <<= 2; // Scale by 4
             // SW rs2', imm(rs1')
             return (0x23) | (0x2 << 12) | (rs1_prime << 15) | (rs2_prime << 20) | ((imm & 0xFE0) << 20) | ((imm & 0x1F) << 7);
@@ -1545,12 +1546,17 @@ uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
         } else if (funct3 == 0x3) {
             if (rd_rs1 == 2) {
                 // C.ADDI16SP: addi x2, x2, nzimm[9:4]
-                int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFFF00 : 0; // sign bit
-                imm |= ((compressed_inst >> 2) & 0x10) |  // bit [4]
-                       ((compressed_inst >> 3) & 0x8) |   // bit [5]
-                       ((compressed_inst >> 5) & 0x20) |   // bit [6]
-                       ((compressed_inst >> 6) & 0x40) |   // bit [7]
-                       ((compressed_inst >> 7) & 0x80);    // bit [8]
+                // nzimm[9] in bit [12], nzimm[8:7] in bits [4:3], nzimm[6:5] in bits [6:5], nzimm[4] in bit [2]
+                int32_t imm = ((compressed_inst >> 12) & 0x1) << 9 |  // nzimm[9] from bit [12] (sign)
+                              ((compressed_inst >> 4) & 0x1) << 8 |     // nzimm[8] from bit [4]
+                              ((compressed_inst >> 3) & 0x1) << 7 |     // nzimm[7] from bit [3]
+                              ((compressed_inst >> 6) & 0x1) << 6 |     // nzimm[6] from bit [6]
+                              ((compressed_inst >> 5) & 0x1) << 5 |     // nzimm[5] from bit [5]
+                              ((compressed_inst >> 2) & 0x1) << 4;      // nzimm[4] from bit [2]
+                // Sign extend
+                if (imm & 0x200) {
+                    imm |= 0xFFFFFC00;
+                }
                 if (imm == 0) return 0; // Reserved
                 imm <<= 4; // Scale by 16
                 // ADDI x2, x2, imm
@@ -1588,35 +1594,45 @@ uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
                 // ANDI rd', rd', imm
                 return (0x13) | (rd_prime << 7) | (0x7 << 12) | (rd_prime << 15) | ((imm & 0xFFF) << 20);
             } else if (funct2 == 0x3) {
-                uint8_t funct6 = (compressed_inst >> 10) & 0x3F;
+                // C.SUB, C.XOR, C.OR, C.AND: For funct2=3, check bit[12], bit[6], and bit[8] to distinguish
+                // From test file encodings for rd'=1, rs2'=2:
+                // 0x8c89 = C.SUB: bit[12]=0, bit[6]=0
+                // 0x9ca9 = C.XOR: bit[12]=1, bit[6]=0, bit[8]=1
+                // 0x9ccd = C.OR: bit[12]=1, bit[6]=1
+                // 0x9c89 = C.AND: bit[12]=1, bit[6]=0, bit[8]=0
+                uint8_t bit12 = (compressed_inst >> 12) & 0x1;
+                uint8_t bit8 = (compressed_inst >> 8) & 0x1;
+                uint8_t bit6 = (compressed_inst >> 6) & 0x1;
                 uint8_t rd_prime = 8 + ((compressed_inst >> 7) & 0x7);
                 uint8_t rs2_prime = 8 + ((compressed_inst >> 2) & 0x7);
-                if (funct6 == 0x23) {
+                // Check bit[12] first - C.SUB has bit[12]=0
+                if (bit12 == 0) {
                     // C.SUB: sub rd', rd', rs2'
                     return (0x33) | (rd_prime << 7) | (0x0 << 12) | (0x20 << 25) | (rd_prime << 15) | (rs2_prime << 20);
-                } else if (funct6 == 0x27) {
-                    // C.XOR: xor rd', rd', rs2'
-                    return (0x33) | (rd_prime << 7) | (0x4 << 12) | (rd_prime << 15) | (rs2_prime << 20);
-                } else if (funct6 == 0x26) {
-                    // C.OR: or rd', rd', rs2'
-                    return (0x33) | (rd_prime << 7) | (0x6 << 12) | (rd_prime << 15) | (rs2_prime << 20);
-                } else if (funct6 == 0x24) {
-                    // C.AND: and rd', rd', rs2'
-                    return (0x33) | (rd_prime << 7) | (0x7 << 12) | (rd_prime << 15) | (rs2_prime << 20);
+                } else {
+                    // bit[12]=1, check bit[6] to distinguish C.OR from C.XOR/C.AND
+                    if (bit6 == 1) {
+                        // C.OR: or rd', rd', rs2'
+                        return (0x33) | (rd_prime << 7) | (0x6 << 12) | (rd_prime << 15) | (rs2_prime << 20);
+                    } else {
+                        // bit[6]=0, check bit[8] to distinguish C.AND from C.XOR
+                        if (bit8 == 0) {
+                            // C.AND: and rd', rd', rs2'
+                            return (0x33) | (rd_prime << 7) | (0x7 << 12) | (rd_prime << 15) | (rs2_prime << 20);
+                        } else {
+                            // C.XOR: xor rd', rd', rs2'
+                            return (0x33) | (rd_prime << 7) | (0x4 << 12) | (rd_prime << 15) | (rs2_prime << 20);
+                        }
+                    }
                 }
             }
         } else if (funct3 == 0x5) {
             // C.J: jal x0, offset[11:1]
-            // C.J immediate encoding: imm[11|4|9:8|10|6|7|3:1|5]
-            // Bits in instruction: [12|6|10:9|11|7|8|5:3|2]
-            int32_t imm = ((compressed_inst >> 12) & 0x1) << 11 |  // imm[11] from bit [12]
-                   ((compressed_inst >> 6) & 0x1) << 4 |   // imm[4] from bit [6]
-                   ((compressed_inst >> 10) & 0x3) << 8 |   // imm[9:8] from bits [10:9]
-                   ((compressed_inst >> 11) & 0x1) << 10 |  // imm[10] from bit [11]
-                   ((compressed_inst >> 7) & 0x1) << 6 |   // imm[6] from bit [7]
-                   ((compressed_inst >> 8) & 0x1) << 7 |   // imm[7] from bit [8]
-                   ((compressed_inst >> 5) & 0x7) << 1 |    // imm[3:1] from bits [5:3]
-                   ((compressed_inst >> 2) & 0x1) << 5;    // imm[5] from bit [2]
+            // Instruction bits [12|10:5|4:1|11] correspond to imm[10|9:4|3:0|11]
+            int32_t imm = ((compressed_inst >> 12) & 0x1) << 10 |  // imm[10] from bit [12]
+                          ((compressed_inst >> 5) & 0x3F) << 4 |   // imm[9:4] from bits [10:5]
+                          ((compressed_inst >> 1) & 0xF) |          // imm[3:0] from bits [4:1]
+                          ((compressed_inst >> 11) & 0x1) << 11;   // imm[11] from bit [11]
             // Sign extend
             if (imm & 0x800) {
                 imm |= 0xFFFFF000;
@@ -1626,25 +1642,41 @@ uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
             return (0x6F) | (0x00 << 7) | ((imm & 0x7FE) << 20) | ((imm & 0x800) << 12) | ((imm & 0xFF000) << 12) | ((imm & 0x100000) << 31);
         } else if (funct3 == 0x6) {
             // C.BEQZ: beq rs1', x0, offset[8:1]
+            // imm[8] from bit [12], imm[7] from bit [6], imm[6] from bit [5], imm[5] from bit [2]
+            // imm[4] from bit [11], imm[3] from bit [10], imm[2] from bit [4], imm[1] from bit [3]
             uint8_t rs1_prime = 8 + ((compressed_inst >> 7) & 0x7);
-            int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFFF00 : 0; // sign bit
-            imm |= ((compressed_inst >> 2) & 0x20) |   // bit [5]
-                   ((compressed_inst >> 3) & 0x18) |   // bits [4:3]
-                   ((compressed_inst >> 10) & 0x40) |  // bit [6]
-                   ((compressed_inst >> 5) & 0x2) |     // bit [1]
-                   ((compressed_inst >> 6) & 0x1);      // bit [2]
+            int32_t imm = ((compressed_inst >> 12) & 0x1) << 8 |  // imm[8] from bit [12] (sign)
+                          ((compressed_inst >> 6) & 0x1) << 7 |     // imm[7] from bit [6]
+                          ((compressed_inst >> 5) & 0x1) << 6 |     // imm[6] from bit [5]
+                          ((compressed_inst >> 2) & 0x1) << 5 |     // imm[5] from bit [2]
+                          ((compressed_inst >> 11) & 0x1) << 4 |    // imm[4] from bit [11]
+                          ((compressed_inst >> 10) & 0x1) << 3 |    // imm[3] from bit [10]
+                          ((compressed_inst >> 4) & 0x1) << 2 |     // imm[2] from bit [4]
+                          ((compressed_inst >> 3) & 0x1) << 1;      // imm[1] from bit [3]
+            // Sign extend
+            if (imm & 0x100) {
+                imm |= 0xFFFFFE00;
+            }
             imm <<= 1; // Scale by 2
             // BEQ rs1', x0, imm
             return (0x63) | (0x0 << 12) | (rs1_prime << 15) | ((imm & 0x800) << 4) | ((imm & 0x1E) << 7) | ((imm & 0x3E0) << 20) | ((imm & 0x400) >> 3);
         } else if (funct3 == 0x7) {
             // C.BNEZ: bne rs1', x0, offset[8:1]
+            // imm[8] from bit [12], imm[7] from bit [6], imm[6] from bit [5], imm[5] from bit [2]
+            // imm[4] from bit [11], imm[3] from bit [10], imm[2] from bit [4], imm[1] from bit [3]
             uint8_t rs1_prime = 8 + ((compressed_inst >> 7) & 0x7);
-            int32_t imm = ((compressed_inst >> 12) & 0x1) ? 0xFFFFFF00 : 0; // sign bit
-            imm |= ((compressed_inst >> 2) & 0x20) |   // bit [5]
-                   ((compressed_inst >> 3) & 0x18) |   // bits [4:3]
-                   ((compressed_inst >> 10) & 0x40) |  // bit [6]
-                   ((compressed_inst >> 5) & 0x2) |     // bit [1]
-                   ((compressed_inst >> 6) & 0x1);      // bit [2]
+            int32_t imm = ((compressed_inst >> 12) & 0x1) << 8 |  // imm[8] from bit [12] (sign)
+                          ((compressed_inst >> 6) & 0x1) << 7 |     // imm[7] from bit [6]
+                          ((compressed_inst >> 5) & 0x1) << 6 |     // imm[6] from bit [5]
+                          ((compressed_inst >> 2) & 0x1) << 5 |     // imm[5] from bit [2]
+                          ((compressed_inst >> 11) & 0x1) << 4 |    // imm[4] from bit [11]
+                          ((compressed_inst >> 10) & 0x1) << 3 |    // imm[3] from bit [10]
+                          ((compressed_inst >> 4) & 0x1) << 2 |     // imm[2] from bit [4]
+                          ((compressed_inst >> 3) & 0x1) << 1;      // imm[1] from bit [3]
+            // Sign extend
+            if (imm & 0x100) {
+                imm |= 0xFFFFFE00;
+            }
             imm <<= 1; // Scale by 2
             // BNE rs1', x0, imm
             return (0x63) | (0x1 << 12) | (rs1_prime << 15) | ((imm & 0x800) << 4) | ((imm & 0x1E) << 7) | ((imm & 0x3E0) << 20) | ((imm & 0x400) >> 3);
@@ -1660,9 +1692,10 @@ uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
             return (0x13) | (rd_rs1 << 7) | (0x1 << 12) | (rd_rs1 << 15) | (shamt << 20);
         } else if (funct3 == 0x2) {
             // C.LWSP: lw rd, offset[7:2](x2)
-            uint32_t imm = ((compressed_inst >> 2) & 0x1C) |  // bits [4:2]
-                          ((compressed_inst >> 7) & 0x20) |   // bit [5]
-                          ((compressed_inst >> 4) & 0x3);    // bits [7:6]
+            // imm[5] from bit [12], imm[4:2] from bits [6:4], imm[7:6] from bits [3:2]
+            uint32_t imm = ((compressed_inst >> 12) & 0x1) << 5 |  // imm[5] from bit [12]
+                          ((compressed_inst >> 4) & 0x7) << 2 |      // imm[4:2] from bits [6:4]
+                          ((compressed_inst >> 2) & 0x3);            // imm[7:6] from bits [3:2]
             if (rd_rs1 == 0) return 0; // Reserved
             imm <<= 2; // Scale by 4
             // LW rd, imm(x2)
@@ -1693,9 +1726,9 @@ uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
             }
         } else if (funct3 == 0x6) {
             // C.SWSP: sw rs2, offset[7:2](x2)
-            uint32_t imm = ((compressed_inst >> 2) & 0x1C) |  // bits [4:2]
-                          ((compressed_inst >> 7) & 0x20) |   // bit [5]
-                          ((compressed_inst >> 4) & 0x3);    // bits [7:6]
+            // imm[5:2] from bits [12:9], imm[7:6] from bits [8:7]
+            uint32_t imm = ((compressed_inst >> 9) & 0xF) << 2 |   // imm[5:2] from bits [12:9]
+                          ((compressed_inst >> 7) & 0x3);            // imm[7:6] from bits [8:7]
             imm <<= 2; // Scale by 4
             // SW rs2, imm(x2)
             return (0x23) | (0x2 << 12) | (0x02 << 15) | (rs2 << 20) | ((imm & 0xFE0) << 20) | ((imm & 0x1F) << 7);
@@ -2161,6 +2194,17 @@ void CPU::log_pipeline_state(int cycle, bool had_stall, bool had_flush) {
     log_file << "Control: stall=" << (had_stall ? "true" : "false") 
          << ", flush=" << (had_flush ? "true" : "false") << std::endl;
     log_file << "Pipeline empty: " << (is_pipeline_empty() ? "true" : "false") << std::endl;
+    
+    // Log key register values for debugging
+    log_file << "Registers: t0(x5)=" << registers[5] 
+             << ", t1(x6)=" << registers[6]
+             << ", t2(x7)=" << registers[7]
+             << ", s0(x8)=" << registers[8]
+             << ", s1(x9)=" << registers[9]
+             << ", a0(x10)=" << registers[10]
+             << ", a1(x11)=" << registers[11]
+             << ", a2(x12)=" << registers[12]
+             << ", a3(x13)=" << registers[13] << std::endl;
     
     // Log JAL/JALR execution details if in EX/MEM
     if (ex_mem.valid && (id_ex.opcode == 0x6F || id_ex.opcode == 0x67)) {

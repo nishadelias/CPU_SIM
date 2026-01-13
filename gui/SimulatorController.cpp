@@ -71,12 +71,21 @@ bool SimulatorController::loadProgram(const QString& filename) {
     
     // Enable logging to pipeline.log in the project root directory
     QFileInfo fileInfo(filename);
-    logFilePath_ = fileInfo.absolutePath() + "/pipeline.log";
-    // If loading from instruction_memory subdirectory, go up one level to project root
-    if (fileInfo.absolutePath().endsWith("instruction_memory")) {
-        QDir dir(fileInfo.absolutePath());
+    QDir dir(fileInfo.absolutePath());
+    // Navigate up to find project root (identified by CMakeLists.txt or CPU_SIM directory name)
+    bool foundRoot = false;
+    for (int i = 0; i < 5 && !dir.isRoot(); ++i) {
+        if (dir.exists("CMakeLists.txt") || dir.dirName() == "CPU_SIM") {
+            foundRoot = true;
+            break;
+        }
         dir.cdUp();
+    }
+    if (foundRoot) {
         logFilePath_ = dir.absoluteFilePath("pipeline.log");
+    } else {
+        // Fallback: use file's directory
+        logFilePath_ = fileInfo.absolutePath() + "/pipeline.log";
     }
     qDebug() << "Logging to:" << logFilePath_;
     cpu_.set_logging(true, logFilePath_.toStdString());
