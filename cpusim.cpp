@@ -12,6 +12,7 @@
 #include <fstream>
 #include <sstream>
 #include <thread>
+#include <cstring>
 using namespace std;
 
 int main(int argc, char* argv[])
@@ -21,6 +22,7 @@ int main(int argc, char* argv[])
     string log_filename = "";
 
     char instMem[4096];
+    memset(instMem, '0', sizeof(instMem));
 
     if (argc < 2) {
         cout << "Usage: " << argv[0] << " <instruction_file> [--debug] [--log <logfile>]" << endl;
@@ -95,6 +97,17 @@ int main(int argc, char* argv[])
         cycle++;
         myCPU.run_pipeline_cycle(instMem, cycle, debug);
 
+        if (myCPU.is_halted()) {
+            if (debug) {
+                if (myCPU.exited_via_syscall()) {
+                    cout << "Simulation halted (ECALL exit) at cycle " << cycle << endl;
+                } else {
+                    cout << "Simulation halted (EBREAK) at cycle " << cycle << endl;
+                }
+            }
+            break;
+        }
+
         if (myCPU.is_pipeline_empty() && myCPU.readPC() >= maxPC - 4) {
             if (debug) {
                 cout << "Pipeline empty and end of program reached at cycle " << cycle << endl;
@@ -118,6 +131,9 @@ int main(int argc, char* argv[])
     cout << std::dec;
     cout << "\n=== Final Results ===" << endl;
     cout << "Total cycles: " << cycle << endl;
+    if (myCPU.exited_via_syscall()) {
+        cout << "Syscall exit code: " << myCPU.get_syscall_exit_code() << endl;
+    }
     myCPU.print_all_registers();
 
     return 0;

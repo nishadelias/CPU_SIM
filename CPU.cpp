@@ -26,6 +26,10 @@ CPU::CPU()
     pipeline_stall = false;
     pipeline_flush = false;
     maxPC = 0;
+    halted_ = false;
+    exited_via_syscall_ = false;
+    syscall_exit_code_ = 0;
+    heap_brk_ = 0;
     enable_logging = false;
     enable_tracing_ = false;
     dmem_ = NULL;
@@ -66,6 +70,10 @@ void CPU::reset() {
     pipeline_stall = false;
     pipeline_flush = false;
     maxPC = 0;
+    halted_ = false;
+    exited_via_syscall_ = false;
+    syscall_exit_code_ = 0;
+    heap_brk_ = 0;
     branch_predicted_taken_ = false;
     branch_predicted_target_ = 0;
     branch_pc_ = 0;
@@ -202,7 +210,12 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
     id_ex.fpRegWrite = false;
     id_ex.fpRegRead1 = false;
     id_ex.fpRegRead2 = false;
+    id_ex.fpRegRead3 = false;
     id_ex.fpOp = 0;
+    id_ex.csr_access = false;
+    id_ex.rs3 = 0;
+    id_ex.ebreak = false;
+    id_ex.ecall = false;
 
     // Decode based on opcode
     switch (*opcode) {
@@ -467,6 +480,83 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             id_ex.memWriteType = 4;  // FSW
             break;
 
+        case 0x73: // SYSTEM (ECALL, EBREAK)
+            *regWrite = false;
+            *aluSrc = false;
+            *branch = false;
+            *memRe = false;
+            *memWr = false;
+            *memToReg = false;
+            *upperIm = false;
+            *aluOp = 0;
+            id_ex.fpRegWrite = false;
+            id_ex.fpRegRead1 = false;
+            id_ex.fpRegRead2 = false;
+            id_ex.fpOp = 0;
+            {
+                uint32_t imm12 = (instruction >> 20) & 0xFFF;
+                if (*funct3 == 0 && imm12 == 1) {
+                    id_ex.ebreak = true;
+                } else if (*funct3 == 0 && imm12 == 0) {
+                    id_ex.ecall = true;
+                } else if (*funct3 >= 1 && *funct3 <= 7) {
+                    // Zicsr — CSRRW/CSRRS/CSRRC/CSRRWI/CSRRSI/CSRRCI (csr in imm[11:0])
+                    id_ex.csr_access = true;
+                    *regWrite = (*rd != 0);
+                    *aluSrc = false;
+                    *branch = false;
+                    *memRe = false;
+                    *memWr = false;
+                    *memToReg = false;
+                    *upperIm = false;
+                    *aluOp = 0;
+                } else {
+                    if (debug) {
+                        std::cout << "Unknown SYSTEM funct3/imm: funct3=" << *funct3
+                                  << " imm12=0x" << std::hex << imm12 << std::dec << std::endl;
+                    }
+                    return false;
+                }
+            }
+            break;
+
+        case 0x43: // FMADD.S
+        case 0x47: // FMSUB.S
+        case 0x4b: // FNMSUB.S
+        case 0x4f: // FNMADD.S
+        {
+            unsigned int funct2 = (instruction >> 25) & 0x3;
+            if (funct2 != 0) { // only single-precision (.S) supported
+                if (debug) {
+                    std::cout << "Unsupported FMA precision (funct2=" << funct2 << ")" << std::endl;
+                }
+                return false;
+            }
+            id_ex.fpRegWrite = true;
+            id_ex.fpRegRead1 = true;
+            id_ex.fpRegRead2 = true;
+            id_ex.fpRegRead3 = true;
+            id_ex.rs3 = (instruction >> 27) & 0x1F;
+            *regWrite = false;
+            *aluSrc = false;
+            *branch = false;
+            *memRe = false;
+            *memWr = false;
+            *memToReg = false;
+            *upperIm = false;
+            *aluOp = 0;
+            if (*opcode == 0x43) {
+                id_ex.fpOp = 0x80;
+            } else if (*opcode == 0x47) {
+                id_ex.fpOp = 0x81;
+            } else if (*opcode == 0x4b) {
+                id_ex.fpOp = 0x82;
+            } else {
+                id_ex.fpOp = 0x83;
+            }
+            break;
+        }
+
         case 0x53: // FP arithmetic instructions (FADD.S, FSUB.S, FMUL.S, FDIV.S, etc.)
             // Decode based on funct7 and funct3
             id_ex.fpRegWrite = true;
@@ -608,6 +698,11 @@ int32_t CPU::generate_immediate(uint32_t instruction, int opcode) const {
         case 0x17: //AUIPC
             // Upper immediate - already shifted
             imm = instruction & 0xFFFFF000;
+            break;
+
+        case 0x73: // SYSTEM (I-type immediate in bits 31:20)
+            imm = instruction >> 20;
+            imm = sign_extend(imm, 12);
             break;
     }
     
@@ -859,6 +954,11 @@ void CPU::instruction_decode(bool debug) {
         rs2_fp_data = registers_fp[rs2];
     }
 
+    float rs3_fp_data = 0.0f;
+    if (id_ex.fpRegRead3 && id_ex.rs3 != 0) {
+        rs3_fp_data = registers_fp[id_ex.rs3];
+    }
+
     // Generate immediate value
     int32_t immediate = generate_immediate(if_id.instruction, opcode);
 
@@ -909,6 +1009,7 @@ void CPU::instruction_decode(bool debug) {
     id_ex.rs2_data = rs2_data;
     id_ex.rs1_fp_data = rs1_fp_data;
     id_ex.rs2_fp_data = rs2_fp_data;
+    id_ex.rs3_fp_data = rs3_fp_data;
     id_ex.immediate = immediate;
     id_ex.pc = if_id.pc;
     id_ex.instruction = if_id.instruction;
@@ -931,6 +1032,14 @@ void CPU::instruction_decode(bool debug) {
     }
 }
 
+int32_t CPU::forwarded_int_register(unsigned int r) const {
+    if (r == 0) return 0;
+    if (ex_mem_prev.regWrite && ex_mem_prev.rd != 0 && ex_mem_prev.rd == r)
+        return ex_mem_prev.alu_result;
+    if (mem_wb_prev.regWrite && mem_wb_prev.rd != 0 && mem_wb_prev.rd == r)
+        return mem_wb_prev.memToReg ? mem_wb_prev.mem_data : mem_wb_prev.alu_result;
+    return registers[r];
+}
 
 void CPU::execute_stage(bool debug) {
     if (!id_ex.valid) {
@@ -938,6 +1047,154 @@ void CPU::execute_stage(bool debug) {
         if (debug) {
             std::cout << "EX: No valid instruction to execute" << std::endl;
         }
+        return;
+    }
+
+    if (id_ex.ebreak) {
+        halted_ = true;
+        ex_mem.valid = false;
+        if (debug || enable_logging) {
+            std::cout << "EX: EBREAK — halting simulation (PC=0x" << std::hex << id_ex.pc << std::dec << ")" << std::endl;
+        }
+        return;
+    }
+
+    // ECALL: Linux RISC-V syscall ABI (a7=nr, a0–a6 args; return in a0)
+    if (id_ex.ecall) {
+        const int32_t a7 = forwarded_int_register(17);
+        const int32_t a0_in = forwarded_int_register(10);
+        const int32_t a1 = forwarded_int_register(11);
+        const int32_t a2 = forwarded_int_register(12);
+
+        ex_mem.memRe = false;
+        ex_mem.memWr = false;
+        ex_mem.memToReg = false;
+        ex_mem.memReadType = 0;
+        ex_mem.memWriteType = 0;
+        ex_mem.fpRegWrite = false;
+        ex_mem.rs2_data = 0;
+        ex_mem.pc = id_ex.pc;
+        ex_mem.instruction = id_ex.instruction;
+        ex_mem.is_compressed = id_ex.is_compressed;
+        ex_mem.compressed_inst = id_ex.compressed_inst;
+
+        if (a7 == 93) { // exit
+            syscall_exit_code_ = a0_in;
+            exited_via_syscall_ = true;
+            halted_ = true;
+            ex_mem.valid = false;
+            ex_mem.regWrite = false;
+            if (debug || enable_logging) {
+                std::cout << "EX: ECALL exit(" << a0_in << ")" << std::endl;
+            }
+            return;
+        }
+
+        if (a7 == 64) { // write(fd, buf, count)
+            int32_t ret = 0;
+            if (a0_in == 1 && a2 > 0) {
+                const uint32_t base = static_cast<uint32_t>(a1);
+                for (int32_t i = 0; i < a2; i++) {
+                    int32_t b = read_memory(base + static_cast<uint32_t>(i), 2);
+                    std::cout << static_cast<char>(b & 0xFF);
+                    ret++;
+                }
+                std::cout.flush();
+            }
+            ex_mem.regWrite = true;
+            ex_mem.rd = 10;
+            ex_mem.alu_result = ret;
+            ex_mem.valid = true;
+            if (debug || enable_logging) {
+                std::cout << "EX: ECALL write -> " << ret << std::endl;
+            }
+            return;
+        }
+
+        if (a7 == 214) { // brk
+            const uint32_t req = static_cast<uint32_t>(a0_in);
+            if (req == 0) {
+                ex_mem.alu_result = static_cast<int32_t>(heap_brk_);
+            } else {
+                heap_brk_ = req;
+                ex_mem.alu_result = static_cast<int32_t>(heap_brk_);
+            }
+            ex_mem.regWrite = true;
+            ex_mem.rd = 10;
+            ex_mem.valid = true;
+            if (debug || enable_logging) {
+                std::cout << "EX: ECALL brk -> 0x" << std::hex << static_cast<uint32_t>(ex_mem.alu_result) << std::dec << std::endl;
+            }
+            return;
+        }
+
+        ex_mem.regWrite = true;
+        ex_mem.rd = 10;
+        ex_mem.alu_result = -1;
+        ex_mem.valid = true;
+        if (debug || enable_logging) {
+            std::cout << "EX: ECALL unknown nr " << a7 << std::endl;
+        }
+        return;
+    }
+
+    // Zicsr (FCSR 0x001 fully; other CSRs read as 0, writes ignored)
+    if (id_ex.csr_access) {
+        const uint32_t csr = (static_cast<uint32_t>(id_ex.instruction) >> 20) & 0xFFFu;
+        uint32_t oldv = 0;
+        if (csr == 0x001) {
+            oldv = fcsr;
+        }
+        const uint32_t rs1v = (id_ex.funct3 >= 5)
+            ? (id_ex.rs1 & 0x1Fu)
+            : static_cast<uint32_t>(forwarded_int_register(id_ex.rs1));
+        uint32_t newv = oldv;
+        switch (id_ex.funct3) {
+            case 1: // CSRRW
+                newv = rs1v;
+                break;
+            case 2: // CSRRS
+                if (id_ex.rs1 != 0) {
+                    newv = oldv | rs1v;
+                }
+                break;
+            case 3: // CSRRC
+                if (id_ex.rs1 != 0) {
+                    newv = oldv & ~rs1v;
+                }
+                break;
+            case 5: // CSRRWI
+                newv = rs1v;
+                break;
+            case 6: // CSRRSI
+                if (rs1v != 0) {
+                    newv = oldv | rs1v;
+                }
+                break;
+            case 7: // CSRRCI
+                if (rs1v != 0) {
+                    newv = oldv & ~rs1v;
+                }
+                break;
+            default:
+                break;
+        }
+        if (csr == 0x001) {
+            fcsr = newv & 0xFFFFu;
+        }
+        ex_mem.memRe = false;
+        ex_mem.memWr = false;
+        ex_mem.memToReg = false;
+        ex_mem.fpRegWrite = false;
+        ex_mem.regWrite = id_ex.rd != 0;
+        ex_mem.rd = id_ex.rd;
+        ex_mem.alu_result = static_cast<int32_t>(oldv);
+        ex_mem.rs2_data = 0;
+        ex_mem.pc = id_ex.pc;
+        ex_mem.instruction = id_ex.instruction;
+        ex_mem.is_compressed = id_ex.is_compressed;
+        ex_mem.compressed_inst = id_ex.compressed_inst;
+        ex_mem.valid = true;
         return;
     }
 
@@ -990,6 +1247,13 @@ void CPU::execute_stage(bool debug) {
         fp_operand2 = mem_wb_prev.memToReg ? mem_wb_prev.mem_fp_data : mem_wb_prev.fp_result;
     }
 
+    float fp_operand3 = id_ex.rs3_fp_data;
+    if (ex_mem_prev.fpRegWrite && ex_mem_prev.rd != 0 && ex_mem_prev.rd == id_ex.rs3 && id_ex.fpRegRead3) {
+        fp_operand3 = ex_mem_prev.fp_result;
+    } else if (mem_wb_prev.fpRegWrite && mem_wb_prev.rd != 0 && mem_wb_prev.rd == id_ex.rs3 && id_ex.fpRegRead3) {
+        fp_operand3 = mem_wb_prev.memToReg ? mem_wb_prev.mem_fp_data : mem_wb_prev.fp_result;
+    }
+
     // Call ALU
     int32_t alu_result = alu.execute(operand1, operand2, id_ex.aluOp);
     
@@ -1014,6 +1278,19 @@ void CPU::execute_stage(bool debug) {
             fp_int_result = execute_fp_classify(fp_operand1);
         } else if (id_ex.fpOp == 0x77) {  // FSQRT.S - only uses operand1
             fp_result = execute_fp_operation(fp_operand1, 0.0f, id_ex.fpOp);
+        } else if (id_ex.fpOp >= 0x80 && id_ex.fpOp <= 0x83) {  // F[NM]MADD/F[NM]MSUB.S
+            const float a = fp_operand1;
+            const float b = fp_operand2;
+            const float c = fp_operand3;
+            if (id_ex.fpOp == 0x80) {
+                fp_result = fmaf(a, b, c);
+            } else if (id_ex.fpOp == 0x81) {
+                fp_result = fmaf(a, b, -c);
+            } else if (id_ex.fpOp == 0x82) {
+                fp_result = -fmaf(a, b, -c);
+            } else {
+                fp_result = -fmaf(a, b, c);
+            }
         } else {
             // Other FP operations use both operands
             fp_result = execute_fp_operation(fp_operand1, fp_operand2, id_ex.fpOp);
@@ -1358,6 +1635,10 @@ void CPU::write_back_stage(bool debug) {
 }
 
 void CPU::run_pipeline_cycle(char* instMem, int cycle, bool debug) {
+    if (halted_) {
+        return;
+    }
+
     if (debug) {
         std::cout << "\n=== Cycle " << cycle << " ===" << std::endl;
     }
@@ -1383,6 +1664,10 @@ void CPU::run_pipeline_cycle(char* instMem, int cycle, bool debug) {
     write_back_stage(debug);
     memory_stage(debug);
     execute_stage(debug);
+
+    if (halted_) {
+        return;
+    }
     
     // Check for flush/stall after EX stage
     if (pipeline_flush) cycle_had_flush = true;
@@ -1506,6 +1791,24 @@ uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
             imm <<= 2; // Scale by 4
             // SW rs2', imm(rs1')
             return (0x23) | (0x2 << 12) | (rs1_prime << 15) | (rs2_prime << 20) | ((imm & 0xFE0) << 20) | ((imm & 0x1F) << 7);
+        } else if (funct3 == 0x3) {
+            // C.FLW: flw fd', offset[6:2](rs1') — same offset as C.LW
+            uint8_t fd_prime = 8 + ((compressed_inst >> 2) & 0x7);
+            uint8_t rs1_prime = 8 + ((compressed_inst >> 7) & 0x7);
+            uint32_t imm = ((compressed_inst >> 10) & 0x7) << 3
+                          | ((compressed_inst >> 6) & 0x1) << 6
+                          | ((compressed_inst >> 5) & 0x1) << 2;
+            imm <<= 2;
+            return (0x07) | (fd_prime << 7) | (0x2 << 12) | (rs1_prime << 15) | ((imm & 0xFFF) << 20);
+        } else if (funct3 == 0x7) {
+            // C.FSW: fsw fs2', offset[6:2](rs1')
+            uint8_t fs2_prime = 8 + ((compressed_inst >> 2) & 0x7);
+            uint8_t rs1_prime = 8 + ((compressed_inst >> 7) & 0x7);
+            uint32_t imm = ((compressed_inst >> 10) & 0x7) << 3
+                          | ((compressed_inst >> 6) & 0x1) << 6
+                          | ((compressed_inst >> 5) & 0x1) << 2;
+            imm <<= 2;
+            return (0x27) | (0x2 << 12) | (rs1_prime << 15) | (fs2_prime << 20) | ((imm & 0xFE0) << 20) | ((imm & 0x1F) << 7);
         }
     }
     // Quadrant 1: 01 (C.ADDI, C.JAL, C.LI, C.ADDI16SP, C.LUI, C.SRLI, C.SRAI, C.ANDI, C.SUB, C.XOR, C.OR, C.AND, C.J, C.BEQZ, C.BNEZ)
@@ -1594,37 +1897,25 @@ uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
                 // ANDI rd', rd', imm
                 return (0x13) | (rd_prime << 7) | (0x7 << 12) | (rd_prime << 15) | ((imm & 0xFFF) << 20);
             } else if (funct2 == 0x3) {
-                // C.SUB, C.XOR, C.OR, C.AND: For funct2=3, check bit[12], bit[6], and bit[8] to distinguish
-                // From test file encodings for rd'=1, rs2'=2:
-                // 0x8c89 = C.SUB: bit[12]=0, bit[6]=0
-                // 0x9ca9 = C.XOR: bit[12]=1, bit[6]=0, bit[8]=1
-                // 0x9ccd = C.OR: bit[12]=1, bit[6]=1
-                // 0x9c89 = C.AND: bit[12]=1, bit[6]=0, bit[8]=0
-                uint8_t bit12 = (compressed_inst >> 12) & 0x1;
-                uint8_t bit8 = (compressed_inst >> 8) & 0x1;
-                uint8_t bit6 = (compressed_inst >> 6) & 0x1;
+                // C.SUB, C.AND, C.OR, C.XOR (RISC-V spec: [12]=0 → SUB; [12]=1 → [6:5] 00/01/10/11)
                 uint8_t rd_prime = 8 + ((compressed_inst >> 7) & 0x7);
                 uint8_t rs2_prime = 8 + ((compressed_inst >> 2) & 0x7);
-                // Check bit[12] first - C.SUB has bit[12]=0
+                uint8_t bit12 = (compressed_inst >> 12) & 0x1;
                 if (bit12 == 0) {
-                    // C.SUB: sub rd', rd', rs2'
                     return (0x33) | (rd_prime << 7) | (0x0 << 12) | (0x20 << 25) | (rd_prime << 15) | (rs2_prime << 20);
-                } else {
-                    // bit[12]=1, check bit[6] to distinguish C.OR from C.XOR/C.AND
-                    if (bit6 == 1) {
-                        // C.OR: or rd', rd', rs2'
-                        return (0x33) | (rd_prime << 7) | (0x6 << 12) | (rd_prime << 15) | (rs2_prime << 20);
-                    } else {
-                        // bit[6]=0, check bit[8] to distinguish C.AND from C.XOR
-                        if (bit8 == 0) {
-                            // C.AND: and rd', rd', rs2'
-                            return (0x33) | (rd_prime << 7) | (0x7 << 12) | (rd_prime << 15) | (rs2_prime << 20);
-                        } else {
-                            // C.XOR: xor rd', rd', rs2'
-                            return (0x33) | (rd_prime << 7) | (0x4 << 12) | (rd_prime << 15) | (rs2_prime << 20);
-                        }
-                    }
                 }
+                // bits [6:5]: 11=AND, 10=OR, 01=XOR, 00=reserved (per RISC-V spec / Spike)
+                uint8_t b65 = (compressed_inst >> 5) & 0x3;
+                if (b65 == 3) {
+                    return (0x33) | (rd_prime << 7) | (0x7 << 12) | (rd_prime << 15) | (rs2_prime << 20); // AND
+                }
+                if (b65 == 2) {
+                    return (0x33) | (rd_prime << 7) | (0x6 << 12) | (rd_prime << 15) | (rs2_prime << 20); // OR
+                }
+                if (b65 == 1) {
+                    return (0x33) | (rd_prime << 7) | (0x4 << 12) | (rd_prime << 15) | (rs2_prime << 20); // XOR
+                }
+                return 0;
             }
         } else if (funct3 == 0x5) {
             // C.J: jal x0, offset[11:1]
@@ -1702,8 +1993,11 @@ uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
             return (0x03) | (rd_rs1 << 7) | (0x2 << 12) | (0x02 << 15) | ((imm & 0xFFF) << 20);
         } else if (funct3 == 0x4) {
             if (rs2 == 0) {
+                if (rd_rs1 == 0) {
+                    // C.EBREAK
+                    return 0x00100073u;
+                }
                 // C.JR: jalr x0, 0(rs1)
-                if (rd_rs1 == 0) return 0; // Reserved
                 // JALR x0, 0(rs1)
                 return (0x67) | (0x00 << 7) | (0x0 << 12) | (rd_rs1 << 15);
             } else {
@@ -1724,6 +2018,14 @@ uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
                 // ADD rd, rd, rs2
                 return (0x33) | (rd_rs1 << 7) | (0x0 << 12) | (rd_rs1 << 15) | (rs2 << 20);
             }
+        } else if (funct3 == 0x3) {
+            // C.FLWSP: flw rd, offset[7:2](x2)
+            uint32_t imm = ((compressed_inst >> 12) & 0x1) << 5
+                          | ((compressed_inst >> 4) & 0x7) << 2
+                          | ((compressed_inst >> 2) & 0x3);
+            if (rd_rs1 == 0) return 0;
+            imm <<= 2;
+            return (0x07) | (rd_rs1 << 7) | (0x2 << 12) | (0x02 << 15) | ((imm & 0xFFF) << 20);
         } else if (funct3 == 0x6) {
             // C.SWSP: sw rs2, offset[7:2](x2)
             // imm[5:2] from bits [12:9], imm[7:6] from bits [8:7]
@@ -1732,6 +2034,12 @@ uint32_t CPU::expand_compressed_instruction(uint16_t compressed_inst) const {
             imm <<= 2; // Scale by 4
             // SW rs2, imm(x2)
             return (0x23) | (0x2 << 12) | (0x02 << 15) | (rs2 << 20) | ((imm & 0xFE0) << 20) | ((imm & 0x1F) << 7);
+        } else if (funct3 == 0x7) {
+            // C.FSWSP: fsw rs2, offset[7:2](x2) — same offset layout as C.SWSP
+            uint32_t imm = ((compressed_inst >> 9) & 0xF) << 2
+                          | ((compressed_inst >> 7) & 0x3);
+            imm <<= 2;
+            return (0x27) | (0x2 << 12) | (0x02 << 15) | (rs2 << 20) | ((imm & 0xFE0) << 20) | ((imm & 0x1F) << 7);
         }
     }
     
@@ -1938,6 +2246,39 @@ string CPU::disassemble_instruction(uint32_t instruction) const {
             op = "FSW";
             args = FP_REGISTER_NAMES[rs2] + ", " + std::to_string(generate_immediate(instruction, opcode)) + "(" + REGISTER_NAMES[rs1] + ")";
             break;
+
+        case 0x43: // FMADD.S
+        case 0x47: // FMSUB.S
+        case 0x4b: // FNMSUB.S
+        case 0x4f: { // FNMADD.S
+            unsigned int rs3 = (instruction >> 27) & 0x1F;
+            if (opcode == 0x43) {
+                op = "FMADD.S";
+            } else if (opcode == 0x47) {
+                op = "FMSUB.S";
+            } else if (opcode == 0x4b) {
+                op = "FNMSUB.S";
+            } else {
+                op = "FNMADD.S";
+            }
+            args = FP_REGISTER_NAMES[rd] + ", " + FP_REGISTER_NAMES[rs1] + ", " + FP_REGISTER_NAMES[rs2] + ", " + FP_REGISTER_NAMES[rs3];
+            break;
+        }
+
+        case 0x73: { // SYSTEM / Zicsr
+            uint32_t imm12 = (instruction >> 20) & 0xFFF;
+            if (funct3 == 0 && imm12 == 0) {
+                op = "ECALL";
+            } else if (funct3 == 0 && imm12 == 1) {
+                op = "EBREAK";
+            } else if (funct3 >= 1 && funct3 <= 7) {
+                op = "CSR";
+                args = REGISTER_NAMES[rd] + ", 0x" + std::to_string(imm12) + ", " + REGISTER_NAMES[rs1];
+            } else {
+                op = "SYSTEM";
+            }
+            break;
+        }
             
         case 0x53: // FP arithmetic instructions
             if (funct7 == 0x00) {
@@ -2016,6 +2357,16 @@ string CPU::disassemble_compressed_instruction(uint16_t instruction) const {
             uint8_t rs2_prime = 8 + ((instruction >> 2) & 0x7);
             uint8_t rs1_prime = 8 + ((instruction >> 7) & 0x7);
             args = REGISTER_NAMES[rs2_prime] + ", " + std::to_string(((instruction >> 5) & 0x20) | ((instruction >> 6) & 0x18) | ((instruction >> 2) & 0x4)) + "(" + REGISTER_NAMES[rs1_prime] + ")";
+        } else if (funct3 == 0x3) {
+            op_name = "C.FLW";
+            uint8_t fd_prime = 8 + ((instruction >> 2) & 0x7);
+            uint8_t rs1_prime = 8 + ((instruction >> 7) & 0x7);
+            args = FP_REGISTER_NAMES[fd_prime] + ", offset(" + REGISTER_NAMES[rs1_prime] + ")";
+        } else if (funct3 == 0x7) {
+            op_name = "C.FSW";
+            uint8_t fs2_prime = 8 + ((instruction >> 2) & 0x7);
+            uint8_t rs1_prime = 8 + ((instruction >> 7) & 0x7);
+            args = FP_REGISTER_NAMES[fs2_prime] + ", offset(" + REGISTER_NAMES[rs1_prime] + ")";
         }
     }
     // Quadrant 1: 01
@@ -2055,20 +2406,17 @@ string CPU::disassemble_compressed_instruction(uint16_t instruction) const {
                 args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", imm";  // Simplified
             } else if (funct2 == 0x3) {
                 uint8_t rs2_prime = 8 + ((instruction >> 2) & 0x7);
-                uint8_t funct6 = (instruction >> 10) & 0x3F;
-                if (funct6 == 0x23) {
+                uint8_t b12 = (instruction >> 12) & 1;
+                if (b12 == 0) {
                     op_name = "C.SUB";
-                    args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rs2_prime];
-                } else if (funct6 == 0x27) {
-                    op_name = "C.XOR";
-                    args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rs2_prime];
-                } else if (funct6 == 0x26) {
-                    op_name = "C.OR";
-                    args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rs2_prime];
-                } else if (funct6 == 0x24) {
-                    op_name = "C.AND";
-                    args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rs2_prime];
+                } else {
+                    uint8_t b65 = (instruction >> 5) & 3;
+                    if (b65 == 3) op_name = "C.AND";
+                    else if (b65 == 2) op_name = "C.OR";
+                    else if (b65 == 1) op_name = "C.XOR";
+                    else op_name = "C.RESERVED";
                 }
+                args = REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rd_prime] + ", " + REGISTER_NAMES[rs2_prime];
             }
         } else if (funct3 == 0x5) {
             op_name = "C.J";
@@ -2091,10 +2439,18 @@ string CPU::disassemble_compressed_instruction(uint16_t instruction) const {
         } else if (funct3 == 0x2) {
             op_name = "C.LWSP";
             args = REGISTER_NAMES[rd_rs1] + ", offset(sp)";  // Simplified
+        } else if (funct3 == 0x3) {
+            op_name = "C.FLWSP";
+            args = FP_REGISTER_NAMES[rd_rs1] + ", offset(sp)";
         } else if (funct3 == 0x4) {
             if (rs2 == 0) {
-                op_name = "C.JR";
-                args = REGISTER_NAMES[rd_rs1];
+                if (rd_rs1 == 0) {
+                    op_name = "C.EBREAK";
+                    args = "";
+                } else {
+                    op_name = "C.JR";
+                    args = REGISTER_NAMES[rd_rs1];
+                }
             } else {
                 op_name = "C.MV";
                 args = REGISTER_NAMES[rd_rs1] + ", " + REGISTER_NAMES[rs2];
@@ -2110,10 +2466,13 @@ string CPU::disassemble_compressed_instruction(uint16_t instruction) const {
         } else if (funct3 == 0x6) {
             op_name = "C.SWSP";
             args = REGISTER_NAMES[rs2] + ", offset(sp)";  // Simplified
+        } else if (funct3 == 0x7) {
+            op_name = "C.FSWSP";
+            args = FP_REGISTER_NAMES[rs2] + ", offset(sp)";
         }
     }
     
-    return op_name + " " + args;
+    return op_name + (args.empty() ? "" : (" " + args));
 }
 
 void CPU::log_pipeline_state(int cycle, bool had_stall, bool had_flush) {

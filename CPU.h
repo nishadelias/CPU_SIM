@@ -45,7 +45,9 @@ struct ID_EX_Register {
     bool fpRegWrite;  // Write to FP register
     bool fpRegRead1;  // Read from FP register rs1
     bool fpRegRead2;  // Read from FP register rs2
+    bool fpRegRead3;  // Third FP operand (FMADD/FMSUB/...)
     int fpOp;  // FP operation code
+    bool csr_access; // Zicsr: CSRR* / CSRRI*
 
     // Instruction fields
     unsigned int opcode;
@@ -53,6 +55,7 @@ struct ID_EX_Register {
     unsigned int funct3;
     unsigned int rs1;
     unsigned int rs2;
+    unsigned int rs3;  // Third source (FMA: bits [31:27])
     unsigned int funct7;
 
     // Data
@@ -61,19 +64,23 @@ struct ID_EX_Register {
     int32_t immediate;
     float rs1_fp_data;  // FP register rs1 data
     float rs2_fp_data;  // FP register rs2 data
+    float rs3_fp_data;  // FP register rs3 (FMA)
     uint32_t pc;
     uint32_t instruction;  // Store the instruction for disassembly
     bool is_compressed;    // Whether this was a compressed instruction
     uint16_t compressed_inst;  // Original compressed instruction if applicable
+    bool ebreak;           // SYSTEM: EBREAK (halt simulation)
+    bool ecall;            // SYSTEM: ECALL (syscall emulation)
     bool valid;
 
     ID_EX_Register() : regWrite(false), aluSrc(false), branch(false), memRe(false),
                       memWr(false), memToReg(false), upperIm(false), aluOp(0),
                       memReadType(0), memWriteType(0),
-                      fpRegWrite(false), fpRegRead1(false), fpRegRead2(false), fpOp(0),
-                      opcode(0), rd(0), funct3(0), rs1(0), rs2(0), funct7(0),
-                      rs1_data(0), rs2_data(0), immediate(0), rs1_fp_data(0.0f), rs2_fp_data(0.0f),
-                      pc(0), instruction(0), is_compressed(false), compressed_inst(0), valid(false) {}
+                      fpRegWrite(false), fpRegRead1(false), fpRegRead2(false), fpRegRead3(false), fpOp(0),
+                      csr_access(false),
+                      opcode(0), rd(0), funct3(0), rs1(0), rs2(0), rs3(0), funct7(0),
+                      rs1_data(0), rs2_data(0), immediate(0), rs1_fp_data(0.0f), rs2_fp_data(0.0f), rs3_fp_data(0.0f),
+                      pc(0), instruction(0), is_compressed(false), compressed_inst(0), ebreak(false), ecall(false), valid(false) {}
 };
 
 struct EX_MEM_Register {
@@ -333,6 +340,12 @@ private:
 
     // Program termination
     int maxPC;
+    bool halted_;  // Set when EBREAK or exit syscall executes
+    bool exited_via_syscall_;
+    int syscall_exit_code_;
+    uint32_t heap_brk_;  // brk() heap pointer for ECALL (Linux nr 214)
+
+    int32_t forwarded_int_register(unsigned int r) const;
 
     // Logging
     bool enable_logging;
@@ -380,10 +393,6 @@ private:
     int32_t sign_extend(int32_t value, int bits) const;
     bool check_address_alignment(uint32_t address, uint32_t bytes);
     
-    // Compressed instruction support
-    uint32_t expand_compressed_instruction(uint16_t compressed_inst) const;
-    bool is_compressed_instruction(uint16_t inst) const;
-    
     // Floating-point unit operations
     float execute_fp_operation(float operand1, float operand2, int fpOp) const;
     int32_t execute_fp_compare(float operand1, float operand2, int fpOp) const;
@@ -414,6 +423,15 @@ public:
     bool is_pipeline_empty();
     void set_max_pc(int max_pc);
     void reset();  // Reset CPU to initial state
+
+    // Compressed instruction expansion (public for unit tests)
+    uint32_t expand_compressed_instruction(uint16_t compressed_inst) const;
+    bool is_compressed_instruction(uint16_t inst) const;
+
+    // True after EBREAK or exit syscall is executed in the pipeline
+    bool is_halted() const { return halted_; }
+    bool exited_via_syscall() const { return exited_via_syscall_; }
+    int get_syscall_exit_code() const { return syscall_exit_code_; }
 
     // NEW: wire in the memory hierarchy from main()
     void set_data_memory(MemoryDevice* dev) { dmem_ = dev; }

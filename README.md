@@ -15,7 +15,7 @@ This project simulates a **RISC-V CPU** - a simplified but realistic processor t
 - **Extensible Cache Framework**: **Easily add your own custom cache schemes!** The framework makes it simple to implement new cache replacement policies, write policies, or organizational structures for educational experiments
 - **Multiple Branch Predictors**: Compare different branch prediction algorithms (Always Not Taken, Always Taken, Bimodal, GShare, Tournament) with accuracy metrics
 - **Extensible Branch Predictor Framework**: **Easily add your own custom branch predictors!** The framework makes it simple to implement new prediction algorithms, history mechanisms, or hybrid approaches for educational experiments
-- **Full RISC-V Instruction Set**: Supports arithmetic, logical, memory, branch, and jump instructions
+- **RV32IMCF-class ISA**: Integer (RV32I), multiply/divide (M), 16-bit compressed (C), single-precision float (F), plus syscall emulation and a Zicsr subset for **FCSR**
 - **Graphical Interface**: Visualize pipeline execution, register values, memory accesses, and statistics in real-time
 - **Command-Line Interface**: Run simulations from the terminal with detailed logging
 
@@ -102,13 +102,13 @@ cmake --build .
 ./cpusim_gui
 ```
 
-#### Option 2: Build Command-Line Version
+#### Option 2: Build command-line `cpusim` and tests
 
 ```bash
-# Simple compilation
-g++ CPU.cpp ALU.cpp cpusim.cpp -o cpusim
-
-# Or using CMake (if you modify CMakeLists.txt)
+cmake -S . -B build
+cmake --build build -j
+./build/cpusim instruction_memory/instMem-m-ext.txt
+ctest --test-dir build
 ```
 
 ## 🎮 How to Use
@@ -228,52 +228,39 @@ The command-line version displays final register values after execution.
 CPU_SIM/
 ├── CPU.cpp/h              # Main CPU implementation and pipeline
 ├── ALU.cpp/h              # Arithmetic Logic Unit
-├── Cache.h                # Cache implementations (Direct-mapped, Fully Associative, Set-Associative)
-├── CacheScheme.h          # Cache scheme framework and interface
-├── BranchPredictor.h      # Branch predictor implementations (Always Not Taken, Bimodal, GShare, Tournament)
-├── BranchPredictorScheme.h # Branch predictor framework and interface
+├── Cache.h                # Cache implementations
+├── CacheScheme.h          # Cache scheme framework
+├── BranchPredictor.h        # Branch predictor implementations
+├── BranchPredictorScheme.h
 ├── MemoryIf.h             # Memory interface abstraction
 ├── cpusim.cpp             # Command-line simulator entry point
-├── CMakeLists.txt         # Build configuration
-├── CACHE_SCHEMES.md       # Detailed guide on cache schemes and adding custom ones
-├── BRANCH_PREDICTORS.md   # Detailed guide on branch predictors and adding custom ones
-│
-├── gui/                   # GUI source files
-│   ├── main.cpp           # Application entry point
-│   ├── MainWindow.cpp/h   # Main window and UI layout
-│   ├── SimulatorController.cpp/h  # Simulation control logic
-│   ├── PipelineWidget.cpp/h       # Pipeline visualization
-│   ├── StatsWidget.cpp/h          # Statistics display
-│   ├── RegisterWidget.cpp/h       # Register file display
-│   ├── MemoryWidget.cpp/h         # Memory access display
-│   └── DependencyWidget.cpp/h    # Dependency visualization
-│
-├── instruction_memory/    # Machine code programs (hex format)
-│   ├── instMem-r.txt      # R-type instruction tests
-│   ├── instMem-swr.txt    # Store/Write/Read tests
-│   ├── instMem-jswr.txt   # Jump/Store/Write/Read tests
-│   └── instMem-all.txt    # Comprehensive test suite
-│
-├── assembly_translations/ # Human-readable assembly (for reference)
-│   ├── r.txt
-│   ├── swr.txt
-│   ├── jswr.txt
-│   └── all.txt
-│
-└── build/                 # Build directory (created during build)
-    └── cpusim_gui         # Executable (after building)
+├── CMakeLists.txt         # Build configuration (cpusim, cpusim_gui, unit tests)
+├── CACHE_SCHEMES.md
+├── BRANCH_PREDICTORS.md
+├── scripts/
+│   └── run_riscv_integration.sh   # Build + ctest + M/syscall smoke check
+├── tests/
+│   └── rvc_expand_test.cpp          # Compressed-instruction expansion tests
+├── gui/                   # Qt6 GUI
+├── instruction_memory/   # Hex programs (two hex chars per byte line, little-endian words)
+└── build/                 # CMake output (cpusim, cpusim_gui, rvc_expand_test)
 ```
 
 ## 🎯 Features
 
-### Implemented Instructions
+### Implemented instructions (summary)
 
-- **R-type** (Register): ADD, SUB, OR, XOR, AND, SLL, SRL, SRA, SLT, SLTU
-- **I-type** (Immediate): ADDI, SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI
-- **Load/Store**: LW, SW, LB, LBU, LH, LHU, SB, SH
-- **Branch**: BEQ, BNE, BLT, BGE, BLTU, BGEU
-- **Jump**: JAL, JALR
-- **Upper Immediate**: LUI, AUIPC
+**RV32I**: Core integer ops including loads/stores, branches, `JAL`/`JALR`, `LUI`/`AUIPC`. **FENCE** / unknown primary opcodes are treated as NOPs for forward progress.
+
+**RV32M**: `MUL`, `MULH`, `MULHSU`, `MULHU`, `DIV`, `DIVU`, `REM`, `REMU`.
+
+**RV32C** (+ **FC**): Compressed fetch/expand/disassembly for the standard 32-bit-oriented mapping, including **C.FLW** / **C.FSW** / **C.FLWSP** / **C.FSWSP** and **C.EBREAK**.
+
+**RV32F** (subset): `FLW`, `FSW`, `FADD.S`, `FSUB.S`, `FMUL.S`, `FDIV.S`, `FSGNJ.S`, `FMIN.S`, `FMAX.S`, `FSQRT.S`, `FMADD.S`, `FMSUB.S`, `FNMSUB.S`, `FNMADD.S`, comparisons (`FEQ`/`FLT`/`FLE`), `FCVT.W.S`, `FCVT.S.W`, `FMV.X.W`, `FMV.W.X`, `FCLASS.S`. *Not* full spec: e.g. no `FCVT.WU.S` / `FCVT.S.WU`, no `FSGNJN`/`FSGNJX`, fused ops are **single-precision only** (`funct2=00`).
+
+**System / ABI**: `ECALL` with Linux/RISC-V–style nr **93** (exit), **64** (write stdout), **214** (`brk`); `EBREAK` halts the simulation. **Zicsr**: `CSRRW`/`CSRRS`/`CSRRC` and immediate forms decode and execute; **FCSR (`0x001`)** is modeled; other CSRs read as **0** and writes are ignored.
+
+**Running arbitrary compiled C** still depends on your newlib/runtime: only the above syscalls and memory model are emulated—link with a script that matches this environment.
 
 ### Architecture Components
 
@@ -341,22 +328,22 @@ For detailed information about cache schemes and how to add custom ones, see [CA
 
 For detailed information about branch predictors and how to add custom ones, see [BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md).
 
-## 🧪 Test Programs
+## 🧪 Tests
 
-The project includes several test programs:
+**CMake / CTest** (after `cmake -B build`):
 
-- **instMem-r.txt**: Tests basic R-type arithmetic and logical operations
-- **instMem-swr.txt**: Tests memory operations (load/store) with register operations
-- **instMem-jswr.txt**: Tests control flow (jumps/branches) with memory operations
-- **instMem-all.txt**: Comprehensive test covering all instruction types
+- `rvc_expand_test` — compressed expansion goldens
+- `m_ext_syscall` — `instruction_memory/instMem-m-ext.txt` (`MUL` + `ECALL` exit)
 
-Each program has a corresponding assembly translation file in `assembly_translations/` for reference.
+**Scripts**: `scripts/run_riscv_integration.sh` rebuilds, runs **ctest**, and checks syscall output.
+
+**Sample hex programs** live under `instruction_memory/` (e.g. `instMem-all.txt`, `instMem-m-ext.txt`, `instMem-rvc-smoke.txt`).
 
 ## 🔧 Technical Details
 
 ### Architecture Specifications
 
-- **ISA**: RISC-V RV32I (32-bit base integer instruction set)
+- **ISA**: RISC-V **RV32IMCF**-oriented (see limitations above); not a complete formal compliance suite
 - **Endianness**: Little-endian byte ordering
 - **Memory**: 64KB main memory (RAM), byte-addressable
 - **Registers**: 32 general-purpose registers (x0 always zero)
@@ -433,18 +420,15 @@ The simulator can generate detailed execution logs:
 
 ## 🚀 Future Enhancements
 
-Potential improvements:
+Possible extensions:
 
-- Multi-level cache hierarchy (L2/L3 caches)
-- Additional cache replacement policies (FIFO, Random, etc.)
-- Write-back cache policies
-- Additional branch predictor algorithms (Perceptron, Neural, TAGE, etc.)
-- Floating-point instruction support (RV32F)
-- Exception handling and interrupts
-- More advanced forwarding and hazard detection
-- Performance profiling tools
+- Full **RV32F** coverage (unsigned conversions, sign-injection variants, all rounding modes)
+- Precise **IEEE 754** exception flags and full **FCSR** behavior
+- Exceptions, interrupts, **U-mode** / virtual memory
+- Additional syscalls (`read`, `open`, …) if you target a richer libc
+- Multi-level caches, write-back policies, more predictors
 
-Note: Multiple cache schemes (Direct-mapped, Fully Associative, Set-Associative) and branch predictors (Always Not Taken, Always Taken, Bimodal, GShare, Tournament) are already implemented! See [CACHE_SCHEMES.md](CACHE_SCHEMES.md) and [BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md) for details.
+Caches and branch predictors already include several schemes; see [CACHE_SCHEMES.md](CACHE_SCHEMES.md) and [BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md).
 
 ## 🤝 Contributing
 

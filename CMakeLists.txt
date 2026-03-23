@@ -60,3 +60,15 @@ add_executable(cpusim
     ${CPU_SOURCES}
     cpusim.cpp
 )
+
+# Unit tests: RVC expansion (no Qt)
+add_executable(rvc_expand_test
+    tests/rvc_expand_test.cpp
+    ${CPU_SOURCES}
+)
+target_include_directories(rvc_expand_test PRIVATE .)
+
+enable_testing()
+add_test(NAME rvc_expand_test COMMAND $<TARGET_FILE:rvc_expand_test>)
+add_test(NAME m_ext_syscall COMMAND $<TARGET_FILE:cpusim> ${CMAKE_SOURCE_DIR}/instruction_memory/instMem-m-ext.txt)
+set_tests_properties(m_ext_syscall PROPERTIES PASS_REGULAR_EXPRESSION "Syscall exit code: 42")
