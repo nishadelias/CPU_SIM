@@ -3,16 +3,22 @@
 #include "CPU.h"
 #include "Cache.h"
 #include "CacheScheme.h"
+#include "MemoryMap.h"
+#include "ExecutionMode.h"
 #include <iomanip>
 #include <iostream>
 #include <cmath>
 #include <cstring>
 
-#define MEMORY_SIZE 4096
-
 CPU::CPU()
 {
-    PC = 0; //set PC to 0
+    PC = 0;
+    ram_size_ = MemoryMap::RAM_SIZE;
+    use_hex_bounds_ = false;
+    execution_mode_ = ExecutionMode::Educational;
+    faulted_ = false;
+    fault_cause_ = FaultCause::None;
+    fault_tval_ = 0;
 
     for (int i = 0; i < 32; i++) {
         registers[i] = 0;
@@ -55,6 +61,12 @@ CPU::~CPU()
 
 void CPU::reset() {
     PC = 0;
+    ram_size_ = MemoryMap::RAM_SIZE;
+    use_hex_bounds_ = false;
+    execution_mode_ = ExecutionMode::Educational;
+    faulted_ = false;
+    fault_cause_ = FaultCause::None;
+    fault_tval_ = 0;
     
     // Reset all registers
     for (int i = 0; i < 32; i++) {
@@ -115,37 +127,62 @@ unsigned long CPU::readPC()
 }
 void CPU::incPC(int increment)
 {
-	PC += increment;
+	PC += static_cast<uint32_t>(increment);
 }
 
-// returns the current instruction as a string (32-bit)
-string CPU::get_instruction(char *IM) {
-	string inst = "";
-	if (IM[PC*2] == '0' && IM[PC*2+1] == '0') {
-		return "00000000";
-	}
-    for (int i = 0; i < 4; i++) {
-        inst += IM[PC*2 + 6 - i*2];
-        inst += IM[PC*2 + 7 - i*2];
+void CPU::raise_fault(FaultCause cause, uint32_t tval) {
+    faulted_ = true;
+    fault_cause_ = cause;
+    fault_tval_ = tval;
+    halted_ = true;
+}
+
+bool CPU::fetch_halfword_le(uint32_t addr, uint16_t* out) {
+    if (!dmem_) {
+        if (execution_mode_ == ExecutionMode::Executable) {
+            raise_fault(FaultCause::InstructionFetchFault, addr);
+        }
+        return false;
     }
-	return inst;
+    if (addr + 2 > ram_size_) {
+        if (execution_mode_ == ExecutionMode::Executable) {
+            raise_fault(FaultCause::InstructionFetchFault, addr);
+        }
+        return false;
+    }
+    MemResp r = dmem_->load(addr, AccessSize::Half);
+    if (!r.ok) {
+        if (execution_mode_ == ExecutionMode::Executable) {
+            raise_fault(FaultCause::InstructionFetchFault, addr);
+        }
+        return false;
+    }
+    *out = static_cast<uint16_t>(r.data & 0xFFFFu);
+    return true;
 }
 
-// returns a 16-bit instruction as a string
-string CPU::get_instruction_16bit(char *IM) {
-	string inst = "";
-	if (IM[PC*2] == '0' && IM[PC*2+1] == '0' && IM[PC*2+2] == '0' && IM[PC*2+3] == '0') {
-		return "0000";
-	}
-	// Read 2 bytes (4 hex chars) in little-endian format
-	// Memory layout in string: [byte0_high, byte0_low, byte1_high, byte1_low]
-	// For little-endian 16-bit instruction, we want: byte1_high byte1_low byte0_high byte0_low
-	// So read byte1 first, then byte0
-	inst += IM[PC*2 + 2];  // byte1 high nibble
-	inst += IM[PC*2 + 3];  // byte1 low nibble
-	inst += IM[PC*2];      // byte0 high nibble
-	inst += IM[PC*2 + 1];  // byte0 low nibble
-	return inst;
+bool CPU::fetch_word_le(uint32_t addr, uint32_t* out) {
+    if (!dmem_) {
+        if (execution_mode_ == ExecutionMode::Executable) {
+            raise_fault(FaultCause::InstructionFetchFault, addr);
+        }
+        return false;
+    }
+    if (addr + 4 > ram_size_) {
+        if (execution_mode_ == ExecutionMode::Executable) {
+            raise_fault(FaultCause::InstructionFetchFault, addr);
+        }
+        return false;
+    }
+    MemResp r = dmem_->load(addr, AccessSize::Word);
+    if (!r.ok) {
+        if (execution_mode_ == ExecutionMode::Executable) {
+            raise_fault(FaultCause::InstructionFetchFault, addr);
+        }
+        return false;
+    }
+    *out = r.data;
+    return true;
 }
 
 // returns the value of a specific register
@@ -153,6 +190,13 @@ int CPU::get_register_value(int reg) {
 	if (reg < 0 || reg > 32)
 		return 0;
 	return static_cast<int>(registers[reg]);
+}
+
+void CPU::set_register_value(int reg, int32_t value) {
+    if (reg < 0 || reg >= 32) {
+        return;
+    }
+    registers[reg] = value;
 }
 
 // decodes an instruction to get control signals and decode the instruction into the necessary parts
@@ -325,7 +369,12 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
                 *aluOp = 0x25;
             }
             else {
-                // Invalid funct3 for I-type, treat as NOP
+                if (execution_mode_ == ExecutionMode::Executable) {
+                    if (debug) {
+                        std::cout << "Invalid funct3 " << *funct3 << " for I-type instruction" << std::endl;
+                    }
+                    return false;
+                }
                 *regWrite = false;
                 *aluOp = 0;
                 if (debug) {
@@ -627,7 +676,12 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             break;
 
         default:
-            // For now, treat unknown opcodes as NOP to avoid pipeline stalls
+            if (execution_mode_ == ExecutionMode::Executable) {
+                if (debug) {
+                    std::cout << "Unknown opcode: 0x" << std::hex << *opcode << std::dec << std::endl;
+                }
+                return false;
+            }
             *regWrite = false;
             *aluSrc = false;
             *branch = false;
@@ -719,19 +773,30 @@ int32_t CPU::sign_extend(int32_t value, int bits) const {
 }
 
 // Memory access alignment check
-bool CPU::check_address_alignment(uint32_t address, uint32_t bytes) {
-    if (address >= MEMORY_SIZE) {
+bool CPU::check_address_alignment(uint32_t address, uint32_t bytes, bool for_store) {
+    if (address >= ram_size_ || address + bytes > ram_size_) {
         std::cerr << "Memory access out of bounds: " << address << std::endl;
+        if (execution_mode_ == ExecutionMode::Executable) {
+            raise_fault(for_store ? FaultCause::StoreFault : FaultCause::LoadFault, address);
+        }
         return false;
     }
     
     if (bytes == 2 && (address % 2 != 0)) {
         std::cerr << "Unaligned halfword access at address: " << address << std::endl;
+        if (execution_mode_ == ExecutionMode::Executable) {
+            raise_fault(for_store ? FaultCause::StoreAddressMisaligned : FaultCause::LoadAddressMisaligned,
+                         address);
+        }
         return false;
     }
     
     if (bytes == 4 && (address % 4 != 0)) {
         std::cerr << "Unaligned word access at address: " << address << std::endl;
+        if (execution_mode_ == ExecutionMode::Executable) {
+            raise_fault(for_store ? FaultCause::StoreAddressMisaligned : FaultCause::LoadAddressMisaligned,
+                         address);
+        }
         return false;
     }
     
@@ -754,10 +819,16 @@ int32_t CPU::read_memory(uint32_t address, int type) {
     }
 
     uint32_t bytes = static_cast<uint32_t>(sz);
-    if (!check_address_alignment(address, bytes)) return 0;
+    if (!check_address_alignment(address, bytes, false)) return 0;
 
     MemResp r = dmem_->load(address, sz);
-    if (!r.ok) { std::cerr << "Memory read OOB @ " << address << "\n"; return 0; }
+    if (!r.ok) {
+        std::cerr << "Memory read OOB @ " << address << "\n";
+        if (execution_mode_ == ExecutionMode::Executable) {
+            raise_fault(FaultCause::LoadFault, address);
+        }
+        return 0;
+    }
 
     if (type == 1) { // LB sign-extend
         int8_t b = (int8_t)(r.data & 0xFF);
@@ -789,10 +860,15 @@ void CPU::write_memory(uint32_t address, int32_t value, int type) {
     }
 
     uint32_t bytes = static_cast<uint32_t>(sz);
-    if (!check_address_alignment(address, bytes)) return;
+    if (!check_address_alignment(address, bytes, true)) return;
 
     bool ok = dmem_->store(address, (uint32_t)value, sz);
-    if (!ok) { std::cerr << "Memory write OOB @ " << address << "\n"; }
+    if (!ok) {
+        std::cerr << "Memory write OOB @ " << address << "\n";
+        if (execution_mode_ == ExecutionMode::Executable) {
+            raise_fault(FaultCause::StoreFault, address);
+        }
+    }
 }
 
 
@@ -806,7 +882,7 @@ void CPU::print_all_registers() {
 
 // Pipeline stage implementations
 
-void CPU::instruction_fetch(char* instMem, bool debug) {
+void CPU::instruction_fetch(bool debug) {
     if (pipeline_stall) {
         if (debug) { std::cout << "IF: Pipeline stalled, no instruction fetched" << std::endl; }
         return;
@@ -817,58 +893,66 @@ void CPU::instruction_fetch(char* instMem, bool debug) {
         if (debug) { std::cout << "IF: Flushed due to branch" << std::endl; }
         return;
     }
-    if (PC >= maxPC) {
+    if (use_hex_bounds_ && PC >= static_cast<uint32_t>(maxPC)) {
         if_id.valid = false;
         if (debug) { std::cout << "IF: End of program reached at PC " << PC << std::endl; }
         return;
     }
 
-    // First, fetch 16 bits to check if it's a compressed instruction
-    string inst_16_str = get_instruction_16bit(instMem);
-    if (inst_16_str == "0000") {
+    uint16_t inst_16 = 0;
+    uint32_t fetch_pc = PC;
+    if (!fetch_halfword_le(PC, &inst_16)) {
+        if (faulted_) {
+            return;
+        }
+        if_id.valid = false;
+        if (debug) { std::cout << "IF: fetch failed (no instruction)" << std::endl; }
+        return;
+    }
+
+    if (inst_16 == 0) {
         if_id.valid = false;
         if (debug) { std::cout << "IF: NOP instruction (all zeros)" << std::endl; }
         return;
     }
-    
-    uint16_t inst_16 = static_cast<uint16_t>(std::stoul(inst_16_str, nullptr, 16));
-    
-    // Check if it's a compressed instruction (bottom 2 bits != 0b11)
+
     if (is_compressed_instruction(inst_16)) {
-        // It's a 16-bit compressed instruction
         if_id.is_compressed = true;
         if_id.compressed_inst = inst_16;
-        // Expand to 32-bit equivalent
         if_id.instruction = expand_compressed_instruction(inst_16);
-        if_id.pc = PC;
-        // Only mark as valid if expansion succeeded (non-zero result)
+        if_id.pc = fetch_pc;
         if_id.valid = (if_id.instruction != 0);
-        
+
         if (debug) {
-            std::cout << "IF: Fetched compressed instruction 0x" << std::hex << inst_16 
+            std::cout << "IF: Fetched compressed instruction 0x" << std::hex << inst_16
                       << " (expanded to 0x" << if_id.instruction << ") at PC 0x" << if_id.pc << std::dec << std::endl;
         }
-        incPC(2);  // Increment PC by 2 for compressed instruction
+        incPC(2);
     } else {
-        // It's a 32-bit instruction
-    string inst_str = get_instruction(instMem);
-    if (inst_str == "00000000") {
-        if_id.valid = false;
-        if (debug) { std::cout << "IF: NOP instruction (all zeros)" << std::endl; }
-        return;
-    }
-    if_id.instruction = std::stoul(inst_str, nullptr, 16);
+        uint32_t w = 0;
+        if (!fetch_word_le(PC, &w)) {
+            if (faulted_) {
+                return;
+            }
+            if_id.valid = false;
+            return;
+        }
+        if (w == 0) {
+            if_id.valid = false;
+            if (debug) { std::cout << "IF: NOP instruction (all zeros)" << std::endl; }
+            return;
+        }
+        if_id.instruction = w;
         if_id.is_compressed = false;
         if_id.compressed_inst = 0;
-    if_id.pc = PC;
-    if_id.valid = true;
+        if_id.pc = fetch_pc;
+        if_id.valid = true;
 
-    if (debug) {
-        std::cout << "IF: Fetched instruction 0x" << std::hex << if_id.instruction 
-                  << " at PC 0x" << if_id.pc << std::dec << std::endl;
-        std::cout << "IF: Raw instruction string: " << inst_str << std::endl;
-    }
-        incPC(4);  // Increment PC by 4 for 32-bit instruction
+        if (debug) {
+            std::cout << "IF: Fetched instruction 0x" << std::hex << if_id.instruction << " at PC 0x" << if_id.pc
+                      << std::dec << std::endl;
+        }
+        incPC(4);
     }
 }
 
@@ -903,6 +987,17 @@ void CPU::instruction_decode(bool debug) {
                                    &memWr, &memToReg, &upperIm, &aluOp,
                                    &opcode, &rd, &funct3, &rs1, &rs2, &funct7, debug);
 
+    if (!valid) {
+        if (execution_mode_ == ExecutionMode::Executable && if_id.instruction != 0) {
+            raise_fault(FaultCause::IllegalInstruction, if_id.pc);
+        }
+        id_ex.valid = false;
+        if (debug) {
+            std::cout << "ID: Invalid instruction decoded" << std::endl;
+        }
+        return;
+    }
+
     // Load-use hazard detection - disabled for now, relying on forwarding
     // TODO: Implement proper load-use hazard detection
     /*
@@ -919,14 +1014,6 @@ void CPU::instruction_decode(bool debug) {
         return;
     }
     */
-
-    if (!valid) {
-        id_ex.valid = false;
-        if (debug) {
-            std::cout << "ID: Invalid instruction decoded" << std::endl;
-        }
-        return;
-    }
 
     // Track instruction type statistics
     stats_.total_instructions++;
@@ -1028,7 +1115,7 @@ void CPU::instruction_decode(bool debug) {
             disassemble_instruction(if_id.instruction);
         std::cout << "ID: Decoded instruction - " << disasm << std::endl;
         std::cout << "    rs1_data: " << rs1_data << ", rs2_data: " << rs2_data << ", immediate: " << immediate << std::endl;
-        std::cout << "    Valid: " << (valid ? "true" : "false") << std::endl;
+        std::cout << "    Valid: true" << std::endl;
     }
 }
 
@@ -1634,7 +1721,7 @@ void CPU::write_back_stage(bool debug) {
     }
 }
 
-void CPU::run_pipeline_cycle(char* instMem, int cycle, bool debug) {
+void CPU::run_pipeline_cycle(int cycle, bool debug) {
     if (halted_) {
         return;
     }
@@ -1678,8 +1765,12 @@ void CPU::run_pipeline_cycle(char* instMem, int cycle, bool debug) {
     // Check for flush/stall after ID stage (ID might set them)
     if (pipeline_flush) cycle_had_flush = true;
     if (pipeline_stall) cycle_had_stall = true;
+
+    if (halted_) {
+        return;
+    }
     
-    instruction_fetch(instMem, debug);
+    instruction_fetch(debug);
     
     // Final check after all stages
     if (pipeline_flush) cycle_had_flush = true;

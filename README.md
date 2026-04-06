@@ -47,9 +47,15 @@ sudo apt-get install qt6-base-dev qt6-charts-dev cmake build-essential
 ```
 
 **Windows:**
-1. Download Qt6 from https://www.qt.io/download
-2. Install CMake from https://cmake.org/download/
-3. Add both to your PATH
+1. Install **Qt6** (MSVC or MinGW kit) from [Qt Online Installer](https://www.qt.io/download-qt-installer) — enable **Qt Charts** for the same kit you use to compile.
+2. Install **CMake** from [cmake.org](https://cmake.org/download/) and a C++ toolchain (Visual Studio with “Desktop development with C++”, or MinGW).
+3. When configuring CMake, point Qt6:  
+   `cmake -S . -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.x.x/msvc2019_64"`  
+   (adjust the path to your Qt version and compiler folder).
+4. Build: `cmake --build build --config Release`  
+   On Windows with Visual Studio, GUI and test binaries are often under `build/Release/`.
+
+**Path separators:** Examples below use `/` (macOS, Linux, Git Bash, WSL). On **Windows Command Prompt or PowerShell**, use backslashes or quoted paths, e.g. `build\Release\cpusim_gui.exe`.
 
 ## 🎓 Educational Focus: Extensible Frameworks
 
@@ -98,8 +104,11 @@ cmake ..
 # Build
 cmake --build .
 
-# Run the GUI
+# Run the GUI (macOS / Linux)
 ./cpusim_gui
+
+# Windows (Visual Studio generator — release output folder)
+# .\Release\cpusim_gui.exe
 ```
 
 #### Option 2: Build command-line `cpusim` and tests
@@ -111,15 +120,57 @@ cmake --build build -j
 ctest --test-dir build
 ```
 
+On **Windows** with Visual Studio generators, the executables may be under `build/Release/` (or `build/Debug/`). Example:
+
+```text
+build\Release\cpusim.exe instruction_memory\instMem-m-ext.txt
+ctest --test-dir build -C Release
+```
+
+**Git Bash** and **WSL** on Windows can use the Unix-style `./build/cpusim` paths if you build from those environments.
+
 ## 🎮 How to Use
+
+### Programs you can run: ELF (compiled) vs hex text
+
+The simulator uses a **single 64 KiB RAM** at address `0x00000000`. Instruction fetch and loads/stores share that memory.
+
+| Kind | How it is detected | Typical use |
+|------|--------------------|-------------|
+| **ELF** | File starts with the ELF magic bytes `7F 45 4C 46` | Programs compiled and linked for this environment (see below) |
+| **Hex text** | Anything else | **Educational** mode: same format as the files in `instruction_memory/` (whitespace-separated **two hex digits per byte**, little-endian instruction encoding) |
+
+- **GUI (and `cpusim`)** choose the loader automatically: **no separate “mode” switch** — open the `.elf` or `.txt` / `.hex` file.
+- After opening, the **File** panel shows a line such as:
+  - **ELF (compiled C/RISC-V)** — entry address, stack pointer, and program break (`brk`) are set for you.
+  - **Hex text (instruction memory)** — byte count and load address `0x00000000`.
+
+**Linking C for ELF:** Use the [`examples/linker.ld`](examples/linker.ld) and [`examples/crt0.S`](examples/crt0.S) (or a linker script with the same memory layout) so segments fit in 64 KiB and `_start` matches the simulator’s stack/brk setup. Cross-compile with a **RV32** toolchain, for example:
+
+```bash
+riscv32-unknown-elf-gcc -march=rv32imc -mabi=ilp32 -nostdlib -T examples/linker.ld \
+  examples/crt0.S your_program.c -o program.elf
+```
+
+(Exact triple may be `riscv64-unknown-elf-gcc` with `-march=rv32imc -mabi=ilp32` on some systems.)
 
 ### Using the GUI (Recommended for Beginners)
 
 1. **Launch the Application**
+
+   From a terminal (project root), after building:
+
    ```bash
-   cd build
-   ./cpusim_gui
+   # macOS / Linux
+   ./build/cpusim_gui
    ```
+
+   ```powershell
+   # Windows (adjust path to your build output)
+   .\build\Release\cpusim_gui.exe
+   ```
+
+   You can also double-click the executable from your file manager if your platform allows it.
 
 2. **Configure Cache Scheme** (Optional)
    - In the "Cache Configuration" section, select your desired cache scheme
@@ -142,10 +193,12 @@ ctest --test-dir build
    - The branch predictor is applied when you reset or start the simulation
 
 3. **Load a Program**
-   - Click the **"Open Program"** button
-   - Navigate to the `instruction_memory/` directory
-   - Select a program file (e.g., `instMem-all.txt`)
-   - The filename will appear below the button
+   - Click **"Open Program"** (or use **File → Open Program**).
+   - Pick either:
+     - A **hex text** file (e.g. `instruction_memory/instMem-all.txt`, `instMem-m-ext.txt`), or
+     - A **compiled** ELF (`program.elf`) built for this simulator’s memory map.
+   - The **filename** and a **format line** (ELF vs hex, entry/byte count) appear under the button.
+   - **Reset** (or **Simulation → Reset**) reloads the same file from disk and reapplies cache/predictor settings.
 
 4. **Control the Simulation**
    - **Start**: Begin continuous execution at the selected speed
@@ -210,17 +263,28 @@ ctest --test-dir build
 ### Using the Command-Line Version
 
 ```bash
-# Run a test program
-./cpusim instruction_memory/instMem-all.txt
+# Hex text program (same format as instruction_memory/*.txt)
+./build/cpusim instruction_memory/instMem-all.txt
 
-# With debug output
-./cpusim instruction_memory/instMem-all.txt --debug
+# Compiled ELF (auto-detected)
+./build/cpusim path/to/program.elf
 
-# Save pipeline trace to log file
-./cpusim instruction_memory/instMem-all.txt --log pipeline.log
+# Debug trace to stdout
+./build/cpusim instruction_memory/instMem-m-ext.txt --debug
+
+# Pipeline log file
+./build/cpusim instruction_memory/instMem-all.txt --log pipeline.log
+
+# Executable / strict mode: illegal instructions and bad memory accesses halt with fault (not NOP)
+./build/cpusim program.elf --executable
+
+# Benchmark-style stats (CSV or JSON; optional cache / branch predictor)
+./build/cpusim program.elf --bench --json --cache 4way --predictor gshare --max-cycles 200000
 ```
 
-The command-line version displays final register values after execution.
+Use `--help`-style usage: run `cpusim` with no arguments to print the usage message (see `cpusim.cpp`).
+
+**Exit codes:** `0` on normal completion; non-zero if the simulator reports a fault in strict mode (see implementation).
 
 ## 📁 Project Structure
 
@@ -235,15 +299,23 @@ CPU_SIM/
 ├── MemoryIf.h             # Memory interface abstraction
 ├── cpusim.cpp             # Command-line simulator entry point
 ├── CMakeLists.txt         # Build configuration (cpusim, cpusim_gui, unit tests)
+├── MemoryMap.h            # RAM size / base addresses for the execution environment
+├── ElfLoader.cpp/h        # ELF32 PT_LOAD loader
+├── HexLoader.cpp/h        # Legacy hex text loader
+├── ExecutionMode.h        # Educational vs executable (strict traps)
+├── examples/
+│   ├── linker.ld          # Link for 64 KiB RAM at 0x00000000
+│   └── crt0.S             # Minimal _start (stack, call main, ECALL exit)
 ├── CACHE_SCHEMES.md
 ├── BRANCH_PREDICTORS.md
 ├── scripts/
-│   └── run_riscv_integration.sh   # Build + ctest + M/syscall smoke check
+│   └── run_riscv_integration.sh   # Build + ctest + M/syscall smoke check (bash: macOS/Linux)
 ├── tests/
-│   └── rvc_expand_test.cpp          # Compressed-instruction expansion tests
+│   ├── rvc_expand_test.cpp        # Compressed-instruction expansion tests
+│   └── golden_kernel_test.cpp     # Hex kernel syscall smoke test
 ├── gui/                   # Qt6 GUI
-├── instruction_memory/   # Hex programs (two hex chars per byte line, little-endian words)
-└── build/                 # CMake output (cpusim, cpusim_gui, rvc_expand_test)
+├── instruction_memory/   # Hex programs (two hex chars per byte, whitespace-separated)
+└── build/                 # CMake output (cpusim, cpusim_gui, tests)
 ```
 
 ## 🎯 Features
@@ -260,7 +332,15 @@ CPU_SIM/
 
 **System / ABI**: `ECALL` with Linux/RISC-V–style nr **93** (exit), **64** (write stdout), **214** (`brk`); `EBREAK` halts the simulation. **Zicsr**: `CSRRW`/`CSRRS`/`CSRRC` and immediate forms decode and execute; **FCSR (`0x001`)** is modeled; other CSRs read as **0** and writes are ignored.
 
-**Running arbitrary compiled C** still depends on your newlib/runtime: only the above syscalls and memory model are emulated—link with a script that matches this environment.
+**Running arbitrary compiled C** still depends on your libc/runtime: only the above syscalls and memory model are emulated—link with [`examples/linker.ld`](examples/linker.ld) (or equivalent) so **PT_LOAD** segments fit in **64 KiB** at `0x00000000`.
+
+**Execution environment (summary)**  
+| Item | Value |
+|------|--------|
+| ISA | RV32IMC-oriented (optional F; see limitations above) |
+| RAM | 64 KiB byte-addressable, base `0x00000000` |
+| Instruction fetch | Same physical RAM as data (unified address space) |
+| `ExecutionMode` | **Educational** (default): unknown primary opcodes as NOP. **Executable** (`--executable`): faults on illegal instructions / bad memory accesses. |
 
 ### Architecture Components
 
@@ -306,10 +386,10 @@ CPU_SIM/
 
 ### Pipeline Stages
 
-1. **IF (Instruction Fetch)**: Fetches instruction from instruction memory
+1. **IF (Instruction Fetch)**: Fetches instructions from **unified memory** (same 64 KiB RAM as load/store)
 2. **ID (Decode)**: Decodes instruction, reads registers, generates control signals
 3. **EX (Execute)**: Performs ALU operations, calculates branch targets
-4. **MEM (Memory)**: Accesses data memory (load/store operations)
+4. **MEM (Memory)**: Load/store path through the memory interface (typically D-cache backed by RAM)
 5. **WB (Writeback)**: Writes results back to register file
 
 ### Cache Behavior
@@ -334,8 +414,11 @@ For detailed information about branch predictors and how to add custom ones, see
 
 - `rvc_expand_test` — compressed expansion goldens
 - `m_ext_syscall` — `instruction_memory/instMem-m-ext.txt` (`MUL` + `ECALL` exit)
+- `golden_kernel_test` — same hex kernel as above, asserts syscall exit code 42
 
-**Scripts**: `scripts/run_riscv_integration.sh` rebuilds, runs **ctest**, and checks syscall output.
+**Scripts**: `scripts/run_riscv_integration.sh` (bash) rebuilds, runs **ctest**, and checks syscall output.
+
+**Windows:** Run the same tests manually: `ctest --test-dir build` from the project root after configuring and building.
 
 **Sample hex programs** live under `instruction_memory/` (e.g. `instMem-all.txt`, `instMem-m-ext.txt`, `instMem-rvc-smoke.txt`).
 
@@ -392,30 +475,31 @@ For detailed guides, see:
 
 ### GUI Won't Build
 
-- **Qt6 not found**: Make sure Qt6 is installed and in your PATH
-  - macOS: `brew install qt6`
-  - Verify: `qmake6 --version`
+- **Qt6 not found**: Install Qt6 and **Charts** for your toolchain.
+  - **macOS:** `brew install qt6` — ensure `CMAKE_PREFIX_PATH` points at the Qt prefix if CMake fails (`brew --prefix qt6`).
+  - **Linux:** `qt6-base-dev`, `qt6-charts-dev` (or distro-specific Qt6 packages).
+  - **Windows:** Set `-DCMAKE_PREFIX_PATH` to your Qt kit’s `lib/cmake` parent (e.g. `C:/Qt/6.7.0/msvc2019_64`).
 - **CMake errors**: Ensure CMake >= 3.16
-  - Try: `cmake -DCMAKE_PREFIX_PATH=/path/to/qt6 ..`
+  - Try: `cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/qt6`
 - **Compilation errors**: Check that all source files are present and Qt6 Charts is installed
 
 ### GUI Won't Run
 
-- **Program won't load**: Make sure you're selecting files from `instruction_memory/` directory
+- **Program won't load**: Use a valid **hex text** file (non-empty hex byte pairs) or a **32-bit ELF** linked for `0x00000000` / 64 KiB RAM. If the dialog fails, read the error message — ELF must be **EM_RISCV** with **PT_LOAD** segments that fit.
 - **Simulation stuck**: Check the pipeline log file (`pipeline.log`) for details
 - **No updates**: Make sure you've clicked "Start" or "Step" to begin execution
 
 ### Command-Line Issues
 
-- **Program not found**: Use relative paths from project root
+- **Program not found**: Use paths relative to your current directory, or absolute paths. On Windows, quote paths that contain spaces.
 - **No output**: Try adding `--debug` flag to see detailed execution
 
 ## 📝 Logging
 
 The simulator can generate detailed execution logs:
 
-- **GUI**: Automatically writes to `pipeline.log` in the project root
-- **Command-Line**: Use `--log <filename>` to specify log file
+- **GUI**: Writes `pipeline.log` (the GUI tries to place it near the project root when it can find `CMakeLists.txt`; otherwise next to the opened program). Check the status/debug output if you need the exact path.
+- **Command-Line**: Use `--log <filename>` to specify log file (use a path that works on your OS).
 - **Log Format**: Shows pipeline state, register values, memory accesses, and control signals for each cycle
 
 ## 🚀 Future Enhancements

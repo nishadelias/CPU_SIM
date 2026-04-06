@@ -8,8 +8,8 @@
 #include <QTimer>
 #include <QString>
 #include <memory>
+#include <cstdint>
 
-// Forward declarations
 class SimpleRAM;
 
 class SimulatorController : public QObject {
@@ -29,11 +29,15 @@ public:
     CPU* getCPU() { return &cpu_; }
     bool isRunning() const { return isRunning_; }
     int getCurrentCycle() const { return currentCycle_; }
-    
+    bool lastLoadedElf() const { return lastLoadElf_; }
+
+    /** Short description for the UI: ELF vs hex, entry/byte count. Empty if nothing loaded. */
+    QString loadedProgramDescription() const;
+
     // Cache scheme management
     void setCacheScheme(CacheSchemeType scheme);
     CacheSchemeType getCacheScheme() const { return currentCacheScheme_; }
-    
+
     // Branch predictor management
     void setBranchPredictor(BranchPredictorType type);
     BranchPredictorType getBranchPredictor() const { return currentBranchPredictor_; }
@@ -50,7 +54,6 @@ private slots:
 private:
     CPU cpu_;
     QTimer* timer_;
-    char* instructionMemory_;
     int maxPC_;
     int currentCycle_;
     bool isRunning_;
@@ -60,15 +63,19 @@ private:
     CacheSchemeType currentCacheScheme_;
     BranchPredictorScheme* branch_predictor_;
     BranchPredictorType currentBranchPredictor_;
-    QString logFilePath_;  // Store log file path
-    static const int MAX_MEMORY_SIZE = 4096;
+    QString logFilePath_;
+    QString lastProgramPath_;
+    bool lastLoadElf_;
+    uint32_t elf_entry_;
+    uint32_t elf_heap_brk_;
+
     static const int MAX_CYCLES = 10000;  // Prevent infinite loops
 
-    void initializeMemory();
-    void cleanupMemory();
     void initializeMemoryHierarchy();
     void initializeBranchPredictor();
+    void reloadProgramIntoRam();
+    void applyCpuLoadState();
+    bool simulationShouldFinish();
 };
 
 #endif // SIMULATOR_CONTROLLER_H
-

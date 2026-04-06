@@ -1,78 +1,158 @@
 #include "SimulatorController.h"
 #include <QFile>
-#include <QTextStream>
 #include <QDebug>
 #include <QFileInfo>
 #include <QDir>
-#include <cstring>
-#include <memory>
+#include <QString>
 #include "MemoryIf.h"
 #include "Cache.h"
 #include "CacheScheme.h"
 #include "BranchPredictor.h"
+#include "ElfLoader.h"
+#include "HexLoader.h"
+#include "MemoryMap.h"
+#include "ExecutionMode.h"
+
+static bool peek_is_elf(const QString& path) {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+    QByteArray h = f.read(4);
+    return h.size() >= 4 && static_cast<unsigned char>(h[0]) == 0x7f && h[1] == 'E' && h[2] == 'L' &&
+           h[3] == 'F';
+}
+
+QString SimulatorController::loadedProgramDescription() const {
+    if (lastProgramPath_.isEmpty()) {
+        return {};
+    }
+    if (lastLoadElf_) {
+        return QStringLiteral("ELF (compiled C/RISC-V) — entry 0x%1, sp set, brk=0x%2")
+            .arg(elf_entry_, 8, 16, QLatin1Char('0'))
+            .arg(elf_heap_brk_, 8, 16, QLatin1Char('0'));
+    }
+    return QStringLiteral("Hex text (instruction memory) — %1 bytes loaded at 0x%2")
+        .arg(maxPC_)
+        .arg(MemoryMap::HEX_PROGRAM_BASE, 8, 16, QLatin1Char('0'));
+}
 
 SimulatorController::SimulatorController(QObject* parent)
     : QObject(parent)
-    , instructionMemory_(nullptr)
     , maxPC_(0)
     , currentCycle_(0)
     , isRunning_(false)
     , cyclesPerSecond_(10)
+    , dram_(nullptr)
+    , dcache_(nullptr)
+    , currentCacheScheme_(CacheSchemeType::DirectMapped)
+    , branch_predictor_(nullptr)
+    , currentBranchPredictor_(BranchPredictorType::AlwaysNotTaken)
+    , lastLoadElf_(false)
+    , elf_entry_(0)
+    , elf_heap_brk_(0)
 {
     timer_ = new QTimer(this);
     connect(timer_, &QTimer::timeout, this, &SimulatorController::onTimerTick);
-    
-    instructionMemory_ = new char[MAX_MEMORY_SIZE * 2];
-    memset(instructionMemory_, '0', MAX_MEMORY_SIZE * 2);
-    
-    // Initialize memory hierarchy
-    dram_ = nullptr;
-    dcache_ = nullptr;
-    currentCacheScheme_ = CacheSchemeType::DirectMapped;  // Default
-    branch_predictor_ = nullptr;
-    currentBranchPredictor_ = BranchPredictorType::AlwaysNotTaken;  // Default
+
     initializeMemoryHierarchy();
     initializeBranchPredictor();
     cpu_.enable_tracing(true);
 }
 
 SimulatorController::~SimulatorController() {
-    cleanupMemory();
-    if (dcache_) delete dcache_;
-    if (dram_) delete dram_;
-    if (branch_predictor_) delete branch_predictor_;
+    if (dcache_) {
+        delete dcache_;
+    }
+    if (dram_) {
+        delete dram_;
+    }
+    if (branch_predictor_) {
+        delete branch_predictor_;
+    }
+}
+
+void SimulatorController::reloadProgramIntoRam() {
+    if (lastProgramPath_.isEmpty() || !dram_) {
+        return;
+    }
+    if (lastLoadElf_) {
+        ElfLoadResult r = load_elf32_into_ram(lastProgramPath_.toStdString(), *dram_);
+        if (r.ok) {
+            elf_entry_ = r.entry;
+            elf_heap_brk_ = r.heap_brk;
+            maxPC_ = 0;
+        }
+    } else {
+        uint32_t nb = 0;
+        if (load_hex_text_file(lastProgramPath_.toStdString(), *dram_, MemoryMap::HEX_PROGRAM_BASE, nb)) {
+            maxPC_ = static_cast<int>(nb);
+        }
+    }
+}
+
+void SimulatorController::applyCpuLoadState() {
+    cpu_.set_ram_size(MemoryMap::RAM_SIZE);
+    cpu_.set_execution_mode(ExecutionMode::Educational);
+    if (lastLoadElf_) {
+        cpu_.set_use_hex_bounds(false);
+        cpu_.set_max_pc(0);
+        cpu_.set_pc(elf_entry_);
+        cpu_.set_heap_brk(elf_heap_brk_);
+        cpu_.set_register_value(2, static_cast<int32_t>(MemoryMap::STACK_TOP - 16));
+    } else {
+        cpu_.set_use_hex_bounds(true);
+        cpu_.set_max_pc(maxPC_);
+        cpu_.set_pc(MemoryMap::HEX_PROGRAM_BASE);
+        cpu_.set_heap_brk(0);
+    }
+}
+
+bool SimulatorController::simulationShouldFinish() {
+    if (cpu_.is_faulted()) {
+        return true;
+    }
+    if (lastLoadElf_) {
+        return cpu_.is_halted();
+    }
+    return cpu_.is_pipeline_empty() && cpu_.readPC() >= static_cast<unsigned long>(maxPC_);
 }
 
 bool SimulatorController::loadProgram(const QString& filename) {
     QFile file(filename);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    if (!file.open(QIODevice::ReadOnly)) {
         qDebug() << "Failed to open file:" << filename;
         return false;
     }
-    
-    QTextStream in(&file);
-    int i = 0;
-    QString line;
-    
-    while (!in.atEnd() && i < MAX_MEMORY_SIZE * 2) {
-        in >> line;
-        if (line.length() >= 2) {
-            instructionMemory_[i] = line[0].toLatin1();
-            i++;
-            if (i < MAX_MEMORY_SIZE * 2) {
-                instructionMemory_[i] = line[1].toLatin1();
-                i++;
-            }
+    file.close();
+
+    const bool is_elf = peek_is_elf(filename);
+
+    if (is_elf) {
+        SimpleRAM tmp(MemoryMap::RAM_SIZE);
+        ElfLoadResult er = load_elf32_into_ram(filename.toStdString(), tmp);
+        if (!er.ok) {
+            qDebug() << "ELF load failed:" << QString::fromStdString(er.error);
+            return false;
+        }
+    } else {
+        SimpleRAM tmp(MemoryMap::RAM_SIZE);
+        uint32_t nb = 0;
+        if (!load_hex_text_file(filename.toStdString(), tmp, MemoryMap::HEX_PROGRAM_BASE, nb)) {
+            qDebug() << "Hex text load failed (unreadable or out of range)";
+            return false;
+        }
+        if (nb == 0) {
+            qDebug() << "Hex text file has no valid byte tokens (need pairs like 93 00 ...)";
+            return false;
         }
     }
-    
-    maxPC_ = i / 2;
-    cpu_.set_max_pc(maxPC_);
-    
-    // Enable logging to pipeline.log in the project root directory
+
+    lastProgramPath_ = filename;
+    lastLoadElf_ = is_elf;
+
     QFileInfo fileInfo(filename);
     QDir dir(fileInfo.absolutePath());
-    // Navigate up to find project root (identified by CMakeLists.txt or CPU_SIM directory name)
     bool foundRoot = false;
     for (int i = 0; i < 5 && !dir.isRoot(); ++i) {
         if (dir.exists("CMakeLists.txt") || dir.dirName() == "CPU_SIM") {
@@ -84,30 +164,33 @@ bool SimulatorController::loadProgram(const QString& filename) {
     if (foundRoot) {
         logFilePath_ = dir.absoluteFilePath("pipeline.log");
     } else {
-        // Fallback: use file's directory
         logFilePath_ = fileInfo.absolutePath() + "/pipeline.log";
     }
     qDebug() << "Logging to:" << logFilePath_;
-    cpu_.set_logging(true, logFilePath_.toStdString());
-    
-    // Reset CPU
+
     resetSimulation();
-    
-    qDebug() << "Loaded program:" << filename << "Max PC:" << maxPC_;
+
+    cpu_.set_logging(true, logFilePath_.toStdString());
+
+    qDebug() << "Loaded program:" << filename << "elf:" << lastLoadElf_ << "Max PC (hex bytes):" << maxPC_;
     return true;
 }
 
 void SimulatorController::startSimulation() {
-    if (isRunning_) return;
-    
+    if (isRunning_) {
+        return;
+    }
+
     isRunning_ = true;
     timer_->start(1000 / cyclesPerSecond_);
     emit simulationStarted();
 }
 
 void SimulatorController::pauseSimulation() {
-    if (!isRunning_) return;
-    
+    if (!isRunning_) {
+        return;
+    }
+
     isRunning_ = false;
     timer_->stop();
     emit simulationPaused();
@@ -115,47 +198,43 @@ void SimulatorController::pauseSimulation() {
 
 void SimulatorController::resetSimulation() {
     pauseSimulation();
-    
-    // Reset memory hierarchy (cache) to ensure consistent stats
-    // This will use the current cache scheme
+
     initializeMemoryHierarchy();
-    
-    // Reset branch predictor
     initializeBranchPredictor();
-    
-    // Reset CPU state using reset method (avoids copy assignment issues)
+
+    reloadProgramIntoRam();
+
     cpu_.reset();
     cpu_.enable_tracing(true);
-    cpu_.set_data_memory(dcache_);  // Restore memory hierarchy
-    cpu_.set_branch_predictor(branch_predictor_);  // Restore branch predictor
-    cpu_.set_max_pc(maxPC_);
-    
-    // Re-enable logging after reset (reset closes the log file)
-    if (maxPC_ > 0 && !logFilePath_.isEmpty()) {
-        qDebug() << "Re-enabling logging to:" << logFilePath_;
+    cpu_.set_data_memory(dcache_);
+    cpu_.set_branch_predictor(branch_predictor_);
+    applyCpuLoadState();
+
+    if (!logFilePath_.isEmpty() && !lastProgramPath_.isEmpty()) {
         cpu_.set_logging(true, logFilePath_.toStdString());
     }
-    
+
     currentCycle_ = 0;
 }
 
 void SimulatorController::stepSimulation() {
-    if (isRunning_) return;
-    
+    if (isRunning_) {
+        return;
+    }
+
     if (currentCycle_ >= MAX_CYCLES) {
         qDebug() << "Maximum cycles reached. Stopping simulation.";
         pauseSimulation();
         emit simulationFinished();
         return;
     }
-    
+
     currentCycle_++;
-    cpu_.run_pipeline_cycle(instructionMemory_, currentCycle_, false);
-    
+    cpu_.run_pipeline_cycle(currentCycle_, false);
+
     emit cycleCompleted(currentCycle_);
-    
-    // Check if program is finished: pipeline empty and PC beyond program end
-    if (cpu_.is_pipeline_empty() && cpu_.readPC() >= maxPC_) {
+
+    if (simulationShouldFinish()) {
         emit simulationFinished();
     }
 }
@@ -174,76 +253,61 @@ void SimulatorController::onTimerTick() {
         emit simulationFinished();
         return;
     }
-    
-    // Run cycle directly (don't call stepSimulation which checks isRunning_)
+
     currentCycle_++;
-    cpu_.run_pipeline_cycle(instructionMemory_, currentCycle_, false);
-    
+    cpu_.run_pipeline_cycle(currentCycle_, false);
+
     emit cycleCompleted(currentCycle_);
-    
-    // Check if program is finished: pipeline empty and PC beyond program end
-    if (cpu_.is_pipeline_empty() && cpu_.readPC() >= maxPC_) {
+
+    if (simulationShouldFinish()) {
         pauseSimulation();
         emit simulationFinished();
     }
 }
 
-void SimulatorController::initializeMemory() {
-    if (!instructionMemory_) {
-        instructionMemory_ = new char[MAX_MEMORY_SIZE * 2];
-        memset(instructionMemory_, '0', MAX_MEMORY_SIZE * 2);
-    }
-}
-
-void SimulatorController::cleanupMemory() {
-    if (instructionMemory_) {
-        delete[] instructionMemory_;
-        instructionMemory_ = nullptr;
-    }
-}
-
 void SimulatorController::initializeMemoryHierarchy() {
-    if (dram_) delete dram_;
-    if (dcache_) delete dcache_;
-    
+    if (dram_) {
+        delete dram_;
+    }
+    if (dcache_) {
+        delete dcache_;
+    }
+
     dram_ = new SimpleRAM(64 * 1024);
-    dcache_ = createCacheScheme(currentCacheScheme_, dram_, 4*1024, 32);
+    dcache_ = createCacheScheme(currentCacheScheme_, dram_, 4 * 1024, 32);
     cpu_.set_data_memory(dcache_);
 }
 
 void SimulatorController::setCacheScheme(CacheSchemeType scheme) {
     if (currentCacheScheme_ == scheme && dcache_ != nullptr) {
-        return;  // No change needed
+        return;
     }
-    
+
     currentCacheScheme_ = scheme;
-    
-    // Only reinitialize if not currently running
+
     if (!isRunning_) {
         initializeMemoryHierarchy();
         cpu_.set_data_memory(dcache_);
     }
-    // Otherwise, will be reinitialized on next reset
 }
 
 void SimulatorController::setBranchPredictor(BranchPredictorType type) {
     if (currentBranchPredictor_ == type && branch_predictor_ != nullptr) {
-        return;  // No change needed
+        return;
     }
-    
+
     currentBranchPredictor_ = type;
-    
-    // Only reinitialize if not currently running
+
     if (!isRunning_) {
         initializeBranchPredictor();
         cpu_.set_branch_predictor(branch_predictor_);
     }
-    // Otherwise, will be reinitialized on next reset
 }
 
 void SimulatorController::initializeBranchPredictor() {
-    if (branch_predictor_) delete branch_predictor_;
+    if (branch_predictor_) {
+        delete branch_predictor_;
+    }
     branch_predictor_ = createBranchPredictor(currentBranchPredictor_);
     cpu_.set_branch_predictor(branch_predictor_);
 }
-

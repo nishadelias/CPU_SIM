@@ -75,6 +75,7 @@ private:
     QLabel* lblCycle_;
     QLabel* lblStatus_;
     QLabel* lblFilename_;
+    QLabel* lblProgramType_;
     QString currentFilename_;
     
     // Visualization Widgets

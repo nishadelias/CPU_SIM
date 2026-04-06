@@ -13,6 +13,11 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
 # Source files (exclude cpusim.cpp as it has its own main())
+set(LOADER_SOURCES
+    ElfLoader.cpp
+    HexLoader.cpp
+)
+
 set(CPU_SOURCES
     CPU.cpp
     ALU.cpp
@@ -42,6 +47,7 @@ set(GUI_HEADERS
 # Executable for GUI
 add_executable(cpusim_gui
     ${CPU_SOURCES}
+    ${LOADER_SOURCES}
     ${GUI_SOURCES}
     ${GUI_HEADERS}
 )
@@ -58,6 +64,7 @@ target_include_directories(cpusim_gui PRIVATE .)
 # Executable for command-line version
 add_executable(cpusim
     ${CPU_SOURCES}
+    ${LOADER_SOURCES}
     cpusim.cpp
 )
 
@@ -68,7 +75,16 @@ add_executable(rvc_expand_test
 )
 target_include_directories(rvc_expand_test PRIVATE .)
 
+add_executable(golden_kernel_test
+    tests/golden_kernel_test.cpp
+    ${CPU_SOURCES}
+    ${LOADER_SOURCES}
+)
+target_include_directories(golden_kernel_test PRIVATE .)
+
 enable_testing()
 add_test(NAME rvc_expand_test COMMAND $<TARGET_FILE:rvc_expand_test>)
 add_test(NAME m_ext_syscall COMMAND $<TARGET_FILE:cpusim> ${CMAKE_SOURCE_DIR}/instruction_memory/instMem-m-ext.txt)
 set_tests_properties(m_ext_syscall PROPERTIES PASS_REGULAR_EXPRESSION "Syscall exit code: 42")
+add_test(NAME golden_kernel_test COMMAND $<TARGET_FILE:golden_kernel_test>
+    ${CMAKE_SOURCE_DIR}/instruction_memory/instMem-m-ext.txt)

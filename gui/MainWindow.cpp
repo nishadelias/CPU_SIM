@@ -44,6 +44,10 @@ void MainWindow::setupUI() {
     QGroupBox* fileGroup = new QGroupBox("File", controlPanel_);
     QVBoxLayout* fileLayout = new QVBoxLayout(fileGroup);
     btnOpen_ = new QPushButton("Open Program", fileGroup);
+    btnOpen_->setToolTip(
+        "Choose a compiled ELF (linked for 64 KiB RAM at 0x00000000) or a hex text program "
+        "(whitespace-separated pairs of hex digits, same format as instruction_memory/*.txt). "
+        "The simulator detects ELF by the standard 0x7F ELF magic header.");
     fileLayout->addWidget(btnOpen_);
     
     // Filename label (will be updated when file is opened)
@@ -54,6 +58,11 @@ void MainWindow::setupUI() {
     
     // Store reference to filename label
     lblFilename_ = filenameLabel;
+
+    lblProgramType_ = new QLabel("", fileGroup);
+    lblProgramType_->setWordWrap(true);
+    lblProgramType_->setStyleSheet("QLabel { color: #444444; font-size: 11px; }");
+    fileLayout->addWidget(lblProgramType_);
     
     QGroupBox* controlGroup = new QGroupBox("Simulation Control", controlPanel_);
     QVBoxLayout* controlGroupLayout = new QVBoxLayout(controlGroup);
@@ -219,9 +228,9 @@ void MainWindow::updateUI() {
 void MainWindow::openFile() {
     QString filename = QFileDialog::getOpenFileName(
         this,
-        "Open Instruction Memory File",
+        "Open program (ELF or hex text)",
         "instruction_memory",
-        "Text Files (*.txt);;All Files (*)"
+        "Programs (*.elf *.txt *.hex);;ELF — compiled (*.elf);;Hex text (*.txt *.hex);;All Files (*)"
     );
     
     if (!filename.isEmpty()) {
@@ -230,11 +239,17 @@ void MainWindow::openFile() {
             QString fileName = QFileInfo(filename).fileName();
             lblFilename_->setText(fileName);
             lblFilename_->setStyleSheet("QLabel { color: black; font-style: normal; }");
+            lblProgramType_->setText(controller_->loadedProgramDescription());
             setWindowTitle("RISC-V CPU Simulator GUI - " + fileName);
             lblStatus_->setText("Ready");
             resetSimulation();
         } else {
-            QMessageBox::warning(this, "Error", "Failed to load program file.");
+            QMessageBox::warning(
+                this,
+                "Could not load program",
+                "Failed to load the file.\n\n"
+                "- ELF: must be 32-bit little-endian RISC-V (EM_RISCV) with PT_LOAD segments that fit in 64 KiB.\n"
+                "- Hex text: whitespace-separated hex byte pairs (e.g. 93 00 00 00), not empty.");
         }
     }
 }

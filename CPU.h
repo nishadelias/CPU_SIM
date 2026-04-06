@@ -13,6 +13,7 @@
 #include <cstdint>
 #include "MemoryIf.h"
 #include "BranchPredictorScheme.h"
+#include "ExecutionMode.h"
 
 using namespace std;
 
@@ -301,11 +302,18 @@ struct InstructionDependency {
 
 class CPU {
 private:
-    // Removed old internal dmemory[]. Now we go through a pluggable interface:
-    MemoryDevice* dmem_;    // data memory interface (can be a cache)
-    BranchPredictorScheme* branch_predictor_;  // branch predictor
+    // Unified address space: instruction fetch and loads/stores use the same MemoryDevice (typically a cache).
+    MemoryDevice* dmem_;
+    BranchPredictorScheme* branch_predictor_;
 
-    unsigned long PC; //pc 
+    uint32_t PC;
+    uint32_t ram_size_;           // bounds for alignment / OOB checks (default 64 KiB)
+    bool use_hex_bounds_;         // if true, IF stops when PC >= maxPC (legacy hex teaching mode)
+    ExecutionMode execution_mode_;
+
+    bool faulted_;
+    FaultCause fault_cause_;
+    uint32_t fault_tval_; 
     int32_t registers[32];
     float registers_fp[32];  // Floating-point registers (f0-f31)
     uint32_t fcsr;  // Floating-Point Control and Status Register
@@ -377,7 +385,10 @@ private:
     void track_instruction_dependencies(int cycle, uint32_t pc, unsigned int rd, unsigned int rs1, unsigned int rs2);
 
     // Pipeline stage methods
-    void instruction_fetch(char* instMem, bool debug);
+    void instruction_fetch(bool debug);
+    bool fetch_halfword_le(uint32_t addr, uint16_t* out);
+    bool fetch_word_le(uint32_t addr, uint32_t* out);
+    void raise_fault(FaultCause cause, uint32_t tval);
     void instruction_decode(bool debug);
     void execute_stage(bool debug);
     void memory_stage(bool debug);
@@ -391,7 +402,7 @@ private:
 
     int32_t generate_immediate(uint32_t instruction, int opcode) const;
     int32_t sign_extend(int32_t value, int bits) const;
-    bool check_address_alignment(uint32_t address, uint32_t bytes);
+    bool check_address_alignment(uint32_t address, uint32_t bytes, bool for_store);
     
     // Floating-point unit operations
     float execute_fp_operation(float operand1, float operand2, int fpOp) const;
@@ -403,9 +414,8 @@ public:
     ~CPU();
     unsigned long readPC();
     void incPC(int increment = 4);
-    string get_instruction(char *IM);
-    string get_instruction_16bit(char *IM);  // Get 16-bit instruction
     int get_register_value(int reg);
+    void set_register_value(int reg, int32_t value);
     bool decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *branch, bool *memRe, bool *memWr, bool *memToReg, bool *upperIm, int *aluOp,
         unsigned int *opcode, unsigned int *rd, unsigned int *funct3, unsigned int *rs1, unsigned int *rs2, unsigned int *funct7, bool debug=false);
 
@@ -417,8 +427,8 @@ public:
 
     void print_all_registers();
 
-    // Pipeline
-    void run_pipeline_cycle(char* instMem, int cycle, bool debug);
+    // Pipeline (instruction fetch uses dmem_ unified memory)
+    void run_pipeline_cycle(int cycle, bool debug);
     void set_logging(bool enable, string log_filename = "");
     bool is_pipeline_empty();
     void set_max_pc(int max_pc);
@@ -433,8 +443,20 @@ public:
     bool exited_via_syscall() const { return exited_via_syscall_; }
     int get_syscall_exit_code() const { return syscall_exit_code_; }
 
-    // NEW: wire in the memory hierarchy from main()
     void set_data_memory(MemoryDevice* dev) { dmem_ = dev; }
+
+    void set_ram_size(uint32_t bytes) { ram_size_ = bytes; }
+    uint32_t get_ram_size() const { return ram_size_; }
+    void set_use_hex_bounds(bool on) { use_hex_bounds_ = on; }
+    void set_execution_mode(ExecutionMode m) { execution_mode_ = m; }
+    ExecutionMode get_execution_mode() const { return execution_mode_; }
+
+    void set_pc(uint32_t pc) { PC = pc; }
+    void set_heap_brk(uint32_t v) { heap_brk_ = v; }
+
+    bool is_faulted() const { return faulted_; }
+    FaultCause get_fault_cause() const { return fault_cause_; }
+    uint32_t get_fault_tval() const { return fault_tval_; }
     
     // Branch predictor management
     void set_branch_predictor(BranchPredictorScheme* predictor) { branch_predictor_ = predictor; }
