@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Build examples/hello.elf for CPU_SIM (RV32, 64 KiB RAM @ 0).
+# Build RV32 example ELFs for CPU_SIM (64 KiB RAM @ 0).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="${ROOT}/build/hello.elf"
-mkdir -p "${ROOT}/build"
+BUILD="${ROOT}/build"
+mkdir -p "${BUILD}"
 
-# Homebrew RISC-V toolchains are often outside non-interactive PATH.
 export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
 
 pick_gcc() {
@@ -33,11 +32,23 @@ pick_gcc() {
 }
 
 GCC="$(pick_gcc)"
-# rv32im (no C): C.JAL expansion in the simulator is wrong for crt0's call main.
-ARCH_FLAGS=(-march=rv32im -mabi=ilp32)
+# rv32im (no C): avoids known compressed-JAL issues in the simulator.
+ARCH_FLAGS=(-march=rv32im -mabi=ilp32 -O0 -ffreestanding -fno-builtin -fno-pie -mno-relax)
+LDFLAGS=(-nostdlib -T "${ROOT}/examples/linker.ld" -Wl,-no-pie)
 
-"${GCC}" "${ARCH_FLAGS[@]}" -nostdlib -T "${ROOT}/examples/linker.ld" \
-  "${ROOT}/examples/hello.c" -o "${OUT}"
+build_one() {
+  local src="$1"
+  local out="$2"
+  echo "  ${src} -> ${out}"
+  "${GCC}" "${ARCH_FLAGS[@]}" "${LDFLAGS[@]}" "${src}" -o "${out}"
+}
 
-echo "Built ${OUT}"
-file "${OUT}" 2>/dev/null || true
+echo "Using ${GCC}"
+echo "Building examples:"
+
+build_one "${ROOT}/examples/hello.c" "${BUILD}/hello.elf"
+build_one "${ROOT}/examples/fib_print.c" "${BUILD}/fib_print.elf"
+build_one "${ROOT}/examples/count_primes.c" "${BUILD}/count_primes.elf"
+
+echo "Done:"
+file "${BUILD}/hello.elf" "${BUILD}/fib_print.elf" "${BUILD}/count_primes.elf" 2>/dev/null || true

@@ -145,25 +145,113 @@ The simulator uses a **single 64 KiB RAM** at address `0x00000000`. Instruction 
   - **ELF (compiled C/RISC-V)** — entry address, stack pointer, and program break (`brk`) are set for you.
   - **Hex text (instruction memory)** — byte count and load address `0x00000000`.
 
-**Linking C for ELF:** Use the [`examples/linker.ld`](examples/linker.ld) and [`examples/crt0.S`](examples/crt0.S) (or a linker script with the same memory layout) so segments fit in 64 KiB and `_start` matches the simulator’s stack/brk setup. Cross-compile with a **RV32** toolchain, for example:
+### Compiling your own RISC-V programs for CPU_SIM
+
+The GUI and CLI load **32-bit little-endian RISC-V ELF** files linked for a **flat 64 KiB RAM** at address `0x00000000`. You cross-compile on your machine, then open the `.elf` in the simulator (file picker or drag-and-drop).
+
+#### 1. Install a cross-compiler
+
+| Platform | Command |
+|----------|---------|
+| macOS (Homebrew) | `brew install riscv64-elf-gcc` |
+| Linux (Debian/Ubuntu) | `sudo apt install gcc-riscv64-unknown-elf` (or distro equivalent) |
+
+Verify: `riscv64-elf-gcc --version` (or `riscv32-unknown-elf-gcc`).
+
+#### 2. Know the execution environment
+
+| Item | Value |
+|------|--------|
+| ISA | **RV32** — use `-march=rv32im -mabi=ilp32` (recommended; see note on compressed instructions below) |
+| RAM | 64 KiB, byte-addressable, base `0x00000000` |
+| Linker script | [`examples/linker.ld`](examples/linker.ld) — all segments must fit in 64 KiB |
+| Entry | `_start` at the beginning of `.text.init` (see example sources) |
+| Stack | Simulator sets `sp` to top of RAM minus 16 when loading ELF; examples call `sim_init_stack()` for the same layout |
+| libc | **Not available** — use the emulated syscalls below (or [`examples/simlib.h`](examples/simlib.h)) |
+
+**Emulated syscalls** (Linux RISC-V calling convention: number in `a7`, args in `a0`–`a2`, result in `a0`):
+
+| `a7` | Name | Behavior in simulator |
+|------|------|------------------------|
+| 93 | exit | Stops simulation; exit code = `a0` |
+| 64 | write | `write(fd, buf, count)` — only **fd = 1** (stdout) is supported; bytes appear in CLI and the GUI **Program Output** tab |
+| 214 | brk | Heap break for dynamic allocation (advanced) |
+
+#### 3. Build the included examples
 
 ```bash
-riscv32-unknown-elf-gcc -march=rv32imc -mabi=ilp32 -nostdlib -T examples/linker.ld \
-  examples/crt0.S your_program.c -o program.elf
+./scripts/build_example_elf.sh
 ```
 
-(Exact triple may be `riscv64-unknown-elf-gcc` with `-march=rv32imc -mabi=ilp32` on some systems.)
+This produces:
 
-**Quick ELF demo (GUI or CLI):**
+| Output | Source | What it does |
+|--------|--------|----------------|
+| `build/hello.elf` | `examples/hello.c` | Exits with code 42 (short smoke test) |
+| `build/fib_print.elf` | `examples/fib_print.c` | 24 Fibonacci lines to stdout (~140 cycles) |
+| `build/count_primes.elf` | `examples/count_primes.c` | Counts primes 2..400 (~30k+ cycles; nested loops + multiply) |
+
+Run in CLI or GUI:
 
 ```bash
-# macOS: brew install riscv64-elf-gcc
-./scripts/build_example_elf.sh    # produces build/hello.elf (exit code 42)
-./build/cpusim build/hello.elf
-./build/cpusim_gui                # Open Program → build/hello.elf → Start
+./build/cpusim build/count_primes.elf --max-cycles 200000
+./build/cpusim_gui    # Open Program → build/count_primes.elf → Start
 ```
 
-You can also drag-and-drop `*.elf` / `*.hex` / `*.txt` onto the GUI window. Program stdout from ECALL `write` appears in the **Program Output** tab.
+#### 4. Compile your own program
+
+**Recommended pattern** (matches the examples; avoids `call`/`ret` stack issues in the current simulator):
+
+1. Copy [`examples/simlib.h`](examples/simlib.h) or include it from your tree.
+2. Provide `_start` in section `.text.init` with `__attribute__((naked))` (see `examples/fib_print.c`, `examples/count_primes.c`).
+3. Use `SIM_PRINT("literal\n")` and `SIM_EXIT(code)` from [`examples/simlib.h`](examples/simlib.h) — do not use stack locals or `call`/`ret` across functions if possible.
+4. Put loop counters in **static volatile** globals (`.bss`), not stack variables, when using `naked` `_start`.
+
+```bash
+export PATH="/opt/homebrew/bin:$PATH"   # macOS Homebrew, if needed
+
+riscv64-elf-gcc -march=rv32im -mabi=ilp32 -nostdlib \
+  -T examples/linker.ld \
+  my_program.c -o build/my_program.elf
+```
+
+If `my_program.c` is in the project root, add `-I examples` when using `#include "simlib.h"`.
+
+**Alternative: `crt0` + `main`** — link [`examples/crt0.S`](examples/crt0.S) with your `main()`:
+
+```bash
+riscv64-elf-gcc -march=rv32im -mabi=ilp32 -nostdlib -T examples/linker.ld \
+  examples/crt0.S my_program.c -o build/my_program.elf
+```
+
+Programs that save/restore `ra` on the stack (`call`/`ret` with a normal prologue) may misbehave until pipeline forwarding is improved; prefer the `_start` + `simlib.h` style for reliable demos.
+
+**Do not** use host `gcc` or link macOS/Linux x86 binaries — only **RV32 ELF** for this memory map will load.
+
+#### 5. Load and run in the GUI
+
+1. Build the simulator: `cmake -S . -B build && cmake --build build`
+2. Launch `./build/cpusim_gui`
+3. **Open Program** or drag-and-drop your `.elf`
+4. Confirm the file line shows **ELF (compiled C/RISC-V)** with entry and `brk`
+5. Click **Start** or **Step** — watch **Pipeline**, **Registers**, **Statistics**
+6. If your program calls **write** to fd 1, text appears in **Program Output**
+
+CLI sanity check before using the GUI:
+
+```bash
+./build/cpusim build/my_program.elf --max-cycles 200000
+```
+
+#### 6. Troubleshooting
+
+| Problem | Likely cause |
+|---------|----------------|
+| “Could not load program” | Not RV32 ELF, segments > 64 KiB, or wrong endianness |
+| **Program Output** empty | Program never called `write` (exit-only programs are normal) |
+| Simulation stops at 200k cycles | GUI cycle cap; shorten loops or raise `MAX_CYCLES` in `SimulatorController` |
+| `call main` / `ret` loops forever | Known forwarding issue with stack-saved `ra`; use `_start` + `simlib.h` pattern |
+| `riscv64-elf-gcc` not found | Install toolchain; add `/opt/homebrew/bin` to `PATH` on macOS |
 
 ### Using the GUI (Recommended for Beginners)
 
@@ -316,10 +404,15 @@ CPU_SIM/
 ├── ExecutionMode.h        # Educational vs executable (strict traps)
 ├── examples/
 │   ├── linker.ld          # Link for 64 KiB RAM at 0x00000000
-│   └── crt0.S             # Minimal _start (stack, call main, ECALL exit)
+│   ├── crt0.S             # Optional _start (stack, call main, ECALL exit)
+│   ├── simlib.h           # Syscall helpers (write, exit, decimal print)
+│   ├── hello.c            # Minimal exit-42 demo
+│   ├── count_primes.c     # Prime sieve 2..400 (longer nested-loop demo)
+│   └── fib_print.c        # 24 Fibonacci lines + stdout
 ├── CACHE_SCHEMES.md
 ├── BRANCH_PREDICTORS.md
 ├── scripts/
+│   ├── build_example_elf.sh       # Build hello.elf, fib_print.elf, count_primes.elf
 │   └── run_riscv_integration.sh   # Build + ctest + M/syscall smoke check (bash: macOS/Linux)
 ├── tests/
 │   ├── rvc_expand_test.cpp        # Compressed-instruction expansion tests

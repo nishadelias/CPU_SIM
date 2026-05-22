@@ -48,6 +48,7 @@ CPU::CPU()
     // Initialize tracking structures
     for (int i = 0; i < 32; i++) {
         previous_register_values_[i] = 0;
+        reg_last_write_[i] = RegLastWrite();
     }
 
     // dmem_ will be set by main(); we keep nullptr check in load/store
@@ -114,9 +115,9 @@ void CPU::reset() {
     // Reset statistics
     stats_ = CPUStatistics();
     
-    // Reset maps
-    pc_to_cycle_map_.clear();
-    pc_to_rd_map_.clear();
+    for (int i = 0; i < 32; ++i) {
+        reg_last_write_[i] = RegLastWrite();
+    }
     
     // Note: dmem_ is preserved (set externally)
     // Note: enable_tracing_ is preserved
@@ -1106,15 +1107,16 @@ void CPU::instruction_decode(bool debug) {
     id_ex.compressed_inst = if_id.compressed_inst;
     id_ex.valid = true;
 
+    string disasm = if_id.is_compressed ?
+        disassemble_compressed_instruction(if_id.compressed_inst) + " [expanded: " + disassemble_instruction(if_id.instruction) + "]" :
+        disassemble_instruction(if_id.instruction);
+
     // Track instruction dependencies
     if (enable_tracing_) {
-        track_instruction_dependencies(stats_.total_cycles, if_id.pc, rd, rs1, rs2);
+        track_instruction_dependencies(stats_.total_cycles, if_id.pc, rd, rs1, rs2, disasm);
     }
 
     if (debug) {
-        string disasm = if_id.is_compressed ? 
-            disassemble_compressed_instruction(if_id.compressed_inst) + " [expanded: " + disassemble_instruction(if_id.instruction) + "]" :
-            disassemble_instruction(if_id.instruction);
         std::cout << "ID: Decoded instruction - " << disasm << std::endl;
         std::cout << "    rs1_data: " << rs1_data << ", rs2_data: " << rs2_data << ", immediate: " << immediate << std::endl;
         std::cout << "    Valid: true" << std::endl;
@@ -1690,9 +1692,7 @@ void CPU::write_back_stage(bool debug) {
             track_register_change(stats_.total_cycles, mem_wb.rd, old_value, write_data, mem_wb.pc);
             previous_register_values_[mem_wb.rd] = write_data;
             
-            // Update dependency tracking maps
-            pc_to_cycle_map_[mem_wb.pc] = stats_.total_cycles;
-            pc_to_rd_map_[mem_wb.pc] = mem_wb.rd;
+            record_reg_write_wb(mem_wb, stats_.total_cycles);
         }
         
         if (debug) {
@@ -1718,10 +1718,6 @@ void CPU::write_back_stage(bool debug) {
         // Count instructions that complete even if they don't write to registers
         stats_.instructions_retired++;
         
-        // Still track cycle for dependency analysis
-        if (enable_tracing_) {
-            pc_to_cycle_map_[mem_wb.pc] = stats_.total_cycles;
-        }
     }
 }
 
@@ -2777,6 +2773,11 @@ void CPU::capture_pipeline_snapshot(int cycle, bool had_stall, bool had_flush) {
     }
     
     pipeline_trace_.push_back(snapshot);
+    if (pipeline_trace_.size() > kMaxPipelineTraceSnapshots) {
+        const size_t drop = pipeline_trace_.size() - kMaxPipelineTraceSnapshots / 2;
+        pipeline_trace_.erase(pipeline_trace_.begin(),
+                              pipeline_trace_.begin() + static_cast<std::ptrdiff_t>(drop));
+    }
 }
 
 PipelineSnapshot CPU::get_current_pipeline_state(int cycle) const {
@@ -2921,88 +2922,75 @@ void CPU::track_register_change(int cycle, unsigned int reg, int32_t old_value, 
     register_history_.push_back(RegisterChange(cycle, reg, old_value, new_value, pc, disasm));
 }
 
-// Instruction dependency tracking implementation
-void CPU::track_instruction_dependencies(int cycle, uint32_t pc, unsigned int rd, unsigned int rs1, unsigned int rs2) {
-    if (!enable_tracing_) return;
-    
-    // Check for dependencies with previous instructions
-    // RAW (Read After Write): Current instruction reads a register that was written by a previous instruction
-    // Only track RAW dependencies (most relevant for pipeline hazards)
-    // Filter to only show dependencies within reasonable cycle distance (e.g., 10 cycles)
-    const int MAX_CYCLE_DISTANCE = 10;
-    
-    // Get consumer disassembly from current if_id
-    string cons_disasm = "";
-    if (if_id.valid && if_id.pc == pc) {
-        cons_disasm = disassemble_instruction(if_id.instruction);
+bool CPU::pipeline_registers_overlap(int consumer_id_cycle, int producer_wb_cycle) const {
+    // 5-stage pipeline: producer occupies roughly [wb_cycle-4, wb_cycle], consumer
+    // [id_cycle, id_cycle+4]. Intervals overlap iff consumer_id_cycle <= producer_wb_cycle.
+    // If the consumer enters ID after the producer has already left WB, skip — not a
+    // simultaneous pipeline hazard the user needs to see.
+    return consumer_id_cycle <= producer_wb_cycle;
+}
+
+string CPU::disassemble_wb_instruction(const MEM_WB_Register& wb) const {
+    if (!wb.valid || wb.instruction == 0) {
+        return "UNKNOWN";
     }
-    
-    // Check for RAW dependencies (this instruction reads rs1 or rs2)
-    if (rs1 != 0) {
-        for (auto it = pc_to_rd_map_.begin(); it != pc_to_rd_map_.end(); ++it) {
-            if (it->second == rs1 && it->first != pc) {
-                int producer_cycle = pc_to_cycle_map_[it->first];
-                // Only track if within reasonable cycle distance
-                if (cycle - producer_cycle <= MAX_CYCLE_DISTANCE) {
-                    string prod_disasm = "";
-                    
-                    // Try to get producer disassembly from trace
-                    for (const auto& snapshot : pipeline_trace_) {
-                        if (snapshot.mem_wb.pc == it->first) {
-                            prod_disasm = snapshot.mem_wb.disassembly;
-                            break;
-                        }
-                    }
-                    // Fallback: try to disassemble if we can find the instruction
-                    if (prod_disasm.empty()) {
-                        // Look for instruction in any stage
-                        for (const auto& snapshot : pipeline_trace_) {
-                            if (snapshot.if_id.pc == it->first && snapshot.if_id.instruction != 0) {
-                                prod_disasm = snapshot.if_id.disassembly;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    instruction_dependencies_.push_back(
-                        InstructionDependency(it->first, pc, rs1, "RAW", producer_cycle, cycle, prod_disasm, cons_disasm)
-                    );
-                }
-            }
+    if (wb.is_compressed && wb.compressed_inst != 0) {
+        if (wb.instruction != 0) {
+            return disassemble_compressed_instruction(wb.compressed_inst) + " [expanded: " +
+                   disassemble_instruction(wb.instruction) + "]";
+        }
+        return disassemble_compressed_instruction(wb.compressed_inst) + " [reserved]";
+    }
+    return disassemble_instruction(wb.instruction);
+}
+
+void CPU::record_reg_write_wb(const MEM_WB_Register& wb, int cycle) {
+    if (!enable_tracing_ || !wb.valid || !wb.regWrite || wb.rd == 0) {
+        return;
+    }
+    reg_last_write_[wb.rd].pc = wb.pc;
+    reg_last_write_[wb.rd].wb_cycle = cycle;
+    reg_last_write_[wb.rd].disassembly = disassemble_wb_instruction(wb);
+}
+
+void CPU::try_record_raw_dependency(int consumer_id_cycle, uint32_t consumer_pc, unsigned int rs,
+                                    const string& consumer_disasm) {
+    if (rs == 0) {
+        return;
+    }
+    const RegLastWrite& prod = reg_last_write_[rs];
+    if (prod.pc == 0 || prod.wb_cycle < 0 || prod.pc == consumer_pc) {
+        return;
+    }
+    if (!pipeline_registers_overlap(consumer_id_cycle, prod.wb_cycle)) {
+        return;
+    }
+
+    for (const auto& existing : instruction_dependencies_) {
+        if (existing.producer_pc == prod.pc && existing.consumer_pc == consumer_pc &&
+            existing.register_num == rs) {
+            return;
         }
     }
-    
-    if (rs2 != 0) {
-        for (auto it = pc_to_rd_map_.begin(); it != pc_to_rd_map_.end(); ++it) {
-            if (it->second == rs2 && it->first != pc) {
-                int producer_cycle = pc_to_cycle_map_[it->first];
-                // Only track if within reasonable cycle distance
-                if (cycle - producer_cycle <= MAX_CYCLE_DISTANCE) {
-                    string prod_disasm = "";
-                    
-                    // Try to get producer disassembly from trace
-                    for (const auto& snapshot : pipeline_trace_) {
-                        if (snapshot.mem_wb.pc == it->first) {
-                            prod_disasm = snapshot.mem_wb.disassembly;
-                            break;
-                        }
-                    }
-                    // Fallback: try to disassemble if we can find the instruction
-                    if (prod_disasm.empty()) {
-                        // Look for instruction in any stage
-                        for (const auto& snapshot : pipeline_trace_) {
-                            if (snapshot.if_id.pc == it->first && snapshot.if_id.instruction != 0) {
-                                prod_disasm = snapshot.if_id.disassembly;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    instruction_dependencies_.push_back(
-                        InstructionDependency(it->first, pc, rs2, "RAW", producer_cycle, cycle, prod_disasm, cons_disasm)
-                    );
-                }
-            }
-        }
+
+    instruction_dependencies_.push_back(
+        InstructionDependency(prod.pc, consumer_pc, rs, "RAW", prod.wb_cycle, consumer_id_cycle,
+                              prod.disassembly, consumer_disasm));
+
+    while (static_cast<int>(instruction_dependencies_.size()) > kMaxDependencyRecords) {
+        instruction_dependencies_.erase(instruction_dependencies_.begin());
+    }
+}
+
+// Instruction dependency tracking — RAW only, last-writer per register, pipeline overlap filter.
+void CPU::track_instruction_dependencies(int cycle, uint32_t pc, unsigned int rd, unsigned int rs1,
+                                         unsigned int rs2, const string& consumer_disasm) {
+    if (!enable_tracing_) {
+        return;
+    }
+    (void)rd;
+    try_record_raw_dependency(cycle, pc, rs1, consumer_disasm);
+    if (rs2 != rs1) {
+        try_record_raw_dependency(cycle, pc, rs2, consumer_disasm);
     }
 }

@@ -8,6 +8,10 @@ const QStringList PipelineWidget::COLUMN_HEADERS = {
     "Cycle", "IF/ID", "ID/EX", "EX/MEM", "MEM/WB", "Stall", "Flush"
 };
 
+namespace {
+constexpr int kMaxPipelineRows = 1000;
+}
+
 PipelineWidget::PipelineWidget(QWidget* parent)
     : QWidget(parent)
 {
@@ -46,12 +50,14 @@ void PipelineWidget::updateDisplay(CPU* cpu) {
 
 void PipelineWidget::updatePipelineTable(CPU* cpu) {
     const auto& trace = cpu->get_pipeline_trace();
+    const int startRow = qMax(0, static_cast<int>(trace.size()) - kMaxPipelineRows);
+    const int rowCount = static_cast<int>(trace.size()) - startRow;
+
+    pipelineTable_->setRowCount(rowCount);
     
-    pipelineTable_->setRowCount(trace.size());
-    
-    for (size_t i = 0; i < trace.size(); ++i) {
-        const auto& snapshot = trace[i];
-        int row = static_cast<int>(i);
+    for (int i = 0; i < rowCount; ++i) {
+        const auto& snapshot = trace[static_cast<size_t>(startRow + i)];
+        int row = i;
         
         // Cycle
         pipelineTable_->setItem(row, 0, new QTableWidgetItem(QString::number(snapshot.cycle)));
@@ -108,7 +114,7 @@ void PipelineWidget::updatePipelineTable(CPU* cpu) {
     }
     
     // Scroll to bottom to show latest cycle
-    if (!trace.empty()) {
+    if (rowCount > 0) {
         pipelineTable_->scrollToBottom();
     }
 }

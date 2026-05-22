@@ -8,7 +8,6 @@
 #include <string>
 #include <fstream>
 #include <vector>
-#include <map>
 #include "ALU.h"
 #include <cstdint>
 #include "MemoryIf.h"
@@ -279,6 +278,13 @@ struct RegisterChange {
         : cycle(c), register_num(reg), old_value(old_val), new_value(new_val), pc(instruction_pc), instruction_disassembly(disasm) {}
 };
 
+// Last register write for RAW dependency tracking (O(1) per decode, not full PC history).
+struct RegLastWrite {
+    uint32_t pc = 0;
+    int wb_cycle = -1;
+    std::string disassembly;
+};
+
 // Instruction dependency record
 struct InstructionDependency {
     uint32_t producer_pc;      // PC of instruction that produces value
@@ -374,16 +380,26 @@ private:
     
     // Instruction dependency tracking
     vector<InstructionDependency> instruction_dependencies_;
-    map<uint32_t, int> pc_to_cycle_map_;  // Map PC to cycle when instruction was in WB stage
-    map<uint32_t, unsigned int> pc_to_rd_map_;  // Map PC to destination register
-    
+    RegLastWrite reg_last_write_[32];
+
+    static constexpr int kPipelineDepth = 5;
+    static constexpr int kMaxDependencyRecords = 2000;
+    static constexpr size_t kMaxPipelineTraceSnapshots = 8000;
+
+    bool pipeline_registers_overlap(int consumer_id_cycle, int producer_wb_cycle) const;
+    void record_reg_write_wb(const MEM_WB_Register& wb, int cycle);
+    void try_record_raw_dependency(int consumer_id_cycle, uint32_t consumer_pc, unsigned int rs,
+                                   const std::string& consumer_disasm);
+    string disassemble_wb_instruction(const MEM_WB_Register& wb) const;
+
     // Helper to capture pipeline snapshot
     void capture_pipeline_snapshot(int cycle, bool had_stall, bool had_flush);
     
     // Helper methods for tracking
     void track_memory_access(int cycle, uint32_t address, bool is_write, uint32_t value, uint32_t pc, bool cache_hit = false);
     void track_register_change(int cycle, unsigned int reg, int32_t old_value, int32_t new_value, uint32_t pc);
-    void track_instruction_dependencies(int cycle, uint32_t pc, unsigned int rd, unsigned int rs1, unsigned int rs2);
+    void track_instruction_dependencies(int cycle, uint32_t pc, unsigned int rd, unsigned int rs1, unsigned int rs2,
+                                      const string& consumer_disasm);
 
     // Pipeline stage methods
     void instruction_fetch(bool debug);
