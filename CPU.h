@@ -351,6 +351,7 @@ private:
     bool halted_;  // Set when EBREAK or exit syscall executes
     bool exited_via_syscall_;
     int syscall_exit_code_;
+    std::string sim_stdout_;  // captured ECALL write to stdout (fd 1)
     uint32_t heap_brk_;  // brk() heap pointer for ECALL (Linux nr 214)
 
     int32_t forwarded_int_register(unsigned int r) const;
@@ -442,6 +443,10 @@ public:
     bool is_halted() const { return halted_; }
     bool exited_via_syscall() const { return exited_via_syscall_; }
     int get_syscall_exit_code() const { return syscall_exit_code_; }
+
+    /** Bytes written by ECALL write(fd=1) during this run (for GUI console). */
+    const std::string& get_sim_stdout() const { return sim_stdout_; }
+    void clear_sim_stdout() { sim_stdout_.clear(); }
 
     void set_data_memory(MemoryDevice* dev) { dmem_ = dev; }
 

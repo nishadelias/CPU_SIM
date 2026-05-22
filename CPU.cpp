@@ -35,6 +35,7 @@ CPU::CPU()
     halted_ = false;
     exited_via_syscall_ = false;
     syscall_exit_code_ = 0;
+    sim_stdout_.clear();
     heap_brk_ = 0;
     enable_logging = false;
     enable_tracing_ = false;
@@ -85,6 +86,7 @@ void CPU::reset() {
     halted_ = false;
     exited_via_syscall_ = false;
     syscall_exit_code_ = 0;
+    sim_stdout_.clear();
     heap_brk_ = 0;
     branch_predicted_taken_ = false;
     branch_predicted_target_ = 0;
@@ -1183,7 +1185,9 @@ void CPU::execute_stage(bool debug) {
                 const uint32_t base = static_cast<uint32_t>(a1);
                 for (int32_t i = 0; i < a2; i++) {
                     int32_t b = read_memory(base + static_cast<uint32_t>(i), 2);
-                    std::cout << static_cast<char>(b & 0xFF);
+                    const char ch = static_cast<char>(b & 0xFF);
+                    sim_stdout_.push_back(ch);
+                    std::cout << ch;
                     ret++;
                 }
                 std::cout.flush();

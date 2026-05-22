@@ -10,11 +10,14 @@
 #include <QPainter>
 #include <QKeySequence>
 #include <QAbstractItemView>
+#include <QMimeData>
+#include <QUrl>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , controller_(new SimulatorController(this))
 {
+    setAcceptDrops(true);
     setupUI();
     setupMenuBar();
     setupToolBar();
@@ -137,6 +140,9 @@ void MainWindow::setupUI() {
     registerWidget_ = new RegisterWidget(tabWidget_);
     memoryWidget_ = new MemoryWidget(tabWidget_);
     dependencyWidget_ = new DependencyWidget(tabWidget_);
+    consoleWidget_ = new QPlainTextEdit(tabWidget_);
+    consoleWidget_->setReadOnly(true);
+    consoleWidget_->setPlaceholderText("Program stdout (ECALL write to fd 1) appears here during simulation.");
     
     // Add all widgets as tabs
     tabWidget_->addTab(pipelineWidget_, "Pipeline Execution Trace");
@@ -144,6 +150,7 @@ void MainWindow::setupUI() {
     tabWidget_->addTab(registerWidget_, "Register File");
     tabWidget_->addTab(memoryWidget_, "Memory Access History");
     tabWidget_->addTab(dependencyWidget_, "Instruction Dependencies");
+    tabWidget_->addTab(consoleWidget_, "Program Output");
     
     mainSplitter_->addWidget(leftSplitter_);
     mainSplitter_->addWidget(tabWidget_);
@@ -232,26 +239,59 @@ void MainWindow::openFile() {
         "instruction_memory",
         "Programs (*.elf *.txt *.hex);;ELF — compiled (*.elf);;Hex text (*.txt *.hex);;All Files (*)"
     );
-    
     if (!filename.isEmpty()) {
-        if (controller_->loadProgram(filename)) {
-            currentFilename_ = filename;
-            QString fileName = QFileInfo(filename).fileName();
-            lblFilename_->setText(fileName);
-            lblFilename_->setStyleSheet("QLabel { color: black; font-style: normal; }");
-            lblProgramType_->setText(controller_->loadedProgramDescription());
-            setWindowTitle("RISC-V CPU Simulator GUI - " + fileName);
-            lblStatus_->setText("Ready");
-            resetSimulation();
-        } else {
-            QMessageBox::warning(
-                this,
-                "Could not load program",
-                "Failed to load the file.\n\n"
-                "- ELF: must be 32-bit little-endian RISC-V (EM_RISCV) with PT_LOAD segments that fit in 64 KiB.\n"
-                "- Hex text: whitespace-separated hex byte pairs (e.g. 93 00 00 00), not empty.");
-        }
+        openProgramPath(filename);
     }
+}
+
+void MainWindow::openProgramPath(const QString& filename) {
+    if (controller_->loadProgram(filename)) {
+        currentFilename_ = filename;
+        QString fileName = QFileInfo(filename).fileName();
+        lblFilename_->setText(fileName);
+        lblFilename_->setStyleSheet("QLabel { color: black; font-style: normal; }");
+        lblProgramType_->setText(controller_->loadedProgramDescription());
+        setWindowTitle("RISC-V CPU Simulator GUI - " + fileName);
+        lblStatus_->setText("Ready");
+        resetSimulation();
+    } else {
+        const QString detail = controller_->lastLoadError().isEmpty()
+            ? QStringLiteral("Unknown load error.")
+            : controller_->lastLoadError();
+        QMessageBox::warning(
+            this,
+            "Could not load program",
+            QStringLiteral("Failed to load the file.\n\n%1\n\n"
+                           "- ELF: 32-bit little-endian RISC-V (EM_RISCV), PT_LOAD in 64 KiB at 0.\n"
+                           "- Hex: whitespace-separated hex byte pairs (e.g. 93 00 00 00).")
+                .arg(detail));
+    }
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
+    if (event->mimeData()->hasUrls()) {
+        event->acceptProposedAction();
+    }
+}
+
+void MainWindow::dropEvent(QDropEvent* event) {
+    const QList<QUrl> urls = event->mimeData()->urls();
+    if (urls.isEmpty()) {
+        return;
+    }
+    const QString path = urls.first().toLocalFile();
+    if (!path.isEmpty()) {
+        openProgramPath(path);
+    }
+    event->acceptProposedAction();
+}
+
+void MainWindow::updateConsoleDisplay() {
+    if (!consoleWidget_) {
+        return;
+    }
+    const std::string& out = controller_->getCPU()->get_sim_stdout();
+    consoleWidget_->setPlainText(QString::fromStdString(out));
 }
 
 void MainWindow::startSimulation() {
@@ -290,6 +330,7 @@ void MainWindow::resetSimulation() {
     registerWidget_->updateDisplay(controller_->getCPU());
     memoryWidget_->updateDisplay(controller_->getCPU());
     dependencyWidget_->updateDisplay(controller_->getCPU());
+    updateConsoleDisplay();
 }
 
 void MainWindow::stepSimulation() {
@@ -307,6 +348,7 @@ void MainWindow::onCycleCompleted(int cycle) {
     registerWidget_->updateDisplay(cpu);
     memoryWidget_->updateDisplay(cpu);
     dependencyWidget_->updateDisplay(cpu);
+    updateConsoleDisplay();
 }
 
 void MainWindow::onSimulationFinished() {

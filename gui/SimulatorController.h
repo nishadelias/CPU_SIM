@@ -20,6 +20,7 @@ public:
     ~SimulatorController();
 
     bool loadProgram(const QString& filename);
+    QString lastLoadError() const { return lastLoadError_; }
     void startSimulation();
     void pauseSimulation();
     void resetSimulation();
@@ -65,11 +66,12 @@ private:
     BranchPredictorType currentBranchPredictor_;
     QString logFilePath_;
     QString lastProgramPath_;
+    QString lastLoadError_;
     bool lastLoadElf_;
     uint32_t elf_entry_;
     uint32_t elf_heap_brk_;
 
-    static const int MAX_CYCLES = 10000;  // Prevent infinite loops
+    static const int MAX_CYCLES = 200000;  // Prevent infinite loops (matches CLI default scale)
 
     void initializeMemoryHierarchy();
     void initializeBranchPredictor();

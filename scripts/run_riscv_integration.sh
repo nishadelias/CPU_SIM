@@ -15,10 +15,21 @@ echo "${OUT}" | grep -q "Syscall exit code: 42" || {
   exit 1
 }
 echo "M-extension + ECALL integration smoke OK."
+export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
 if command -v riscv32-unknown-elf-gcc >/dev/null 2>&1; then
   echo "riscv32-unknown-elf-gcc: $(riscv32-unknown-elf-gcc --version | head -1)"
-elif command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; then
-  echo "riscv64-unknown-elf-gcc (try: -march=rv32imcf -mabi=ilp32 for RV32): $(riscv64-unknown-elf-gcc --version | head -1)"
+elif command -v riscv64-elf-gcc >/dev/null 2>&1; then
+  echo "riscv64-elf-gcc: $(riscv64-elf-gcc --version | head -1)"
+  if [[ -x "${ROOT}/scripts/build_example_elf.sh" ]]; then
+    "${ROOT}/scripts/build_example_elf.sh"
+    HELLO_OUT="$("${BUILD}/cpusim" "${BUILD}/hello.elf" --max-cycles 50000 2>&1)" || true
+    echo "${HELLO_OUT}"
+    echo "${HELLO_OUT}" | grep -q "Syscall exit code: 42" || {
+      echo "Expected 'Syscall exit code: 42' from build/hello.elf" >&2
+      exit 1
+    }
+    echo "ELF hello.elf integration smoke OK."
+  fi
 else
-  echo "No RISC-V embedded GCC in PATH; install riscv32-unknown-elf-gcc to compile C programs for this ISA."
+  echo "No RISC-V embedded GCC in PATH; install riscv64-elf-gcc (brew install riscv64-elf-gcc) to compile C programs."
 fi

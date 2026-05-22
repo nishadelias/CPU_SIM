@@ -82,9 +82,43 @@ add_executable(golden_kernel_test
 )
 target_include_directories(golden_kernel_test PRIVATE .)
 
+add_executable(hello_elf_test
+    tests/hello_elf_test.cpp
+    ${CPU_SOURCES}
+    ${LOADER_SOURCES}
+)
+target_include_directories(hello_elf_test PRIVATE .)
+
+# Optional: build examples/hello.elf when a RISC-V cross-compiler is available.
+find_program(RISCV_GCC NAMES riscv64-elf-gcc riscv32-unknown-elf-gcc
+    PATHS /opt/homebrew/bin /usr/local/bin)
+set(HELLO_ELF "${CMAKE_BINARY_DIR}/hello.elf")
+if(RISCV_GCC)
+  add_custom_command(
+    OUTPUT "${HELLO_ELF}"
+    COMMAND "${CMAKE_SOURCE_DIR}/scripts/build_example_elf.sh"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "Building hello.elf for CPU_SIM"
+    VERBATIM)
+  add_custom_target(hello_elf DEPENDS "${HELLO_ELF}")
+endif()
+
 enable_testing()
 add_test(NAME rvc_expand_test COMMAND $<TARGET_FILE:rvc_expand_test>)
 add_test(NAME m_ext_syscall COMMAND $<TARGET_FILE:cpusim> ${CMAKE_SOURCE_DIR}/instruction_memory/instMem-m-ext.txt)
 set_tests_properties(m_ext_syscall PROPERTIES PASS_REGULAR_EXPRESSION "Syscall exit code: 42")
 add_test(NAME golden_kernel_test COMMAND $<TARGET_FILE:golden_kernel_test>
     ${CMAKE_SOURCE_DIR}/instruction_memory/instMem-m-ext.txt)
+if(RISCV_GCC)
+  add_test(
+    NAME hello_elf_test
+    COMMAND bash -c
+      "\"${CMAKE_SOURCE_DIR}/scripts/build_example_elf.sh\" && \
+       \"$<TARGET_FILE:hello_elf_test>\" \"${HELLO_ELF}\"")
+  add_test(
+    NAME hello_elf_cpusim
+    COMMAND bash -c
+      "\"${CMAKE_SOURCE_DIR}/scripts/build_example_elf.sh\" && \
+       \"$<TARGET_FILE:cpusim>\" \"${HELLO_ELF}\" --max-cycles 50000")
+  set_tests_properties(hello_elf_cpusim PROPERTIES PASS_REGULAR_EXPRESSION "Syscall exit code: 42")
+endif()

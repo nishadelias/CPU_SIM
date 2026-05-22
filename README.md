@@ -154,6 +154,17 @@ riscv32-unknown-elf-gcc -march=rv32imc -mabi=ilp32 -nostdlib -T examples/linker.
 
 (Exact triple may be `riscv64-unknown-elf-gcc` with `-march=rv32imc -mabi=ilp32` on some systems.)
 
+**Quick ELF demo (GUI or CLI):**
+
+```bash
+# macOS: brew install riscv64-elf-gcc
+./scripts/build_example_elf.sh    # produces build/hello.elf (exit code 42)
+./build/cpusim build/hello.elf
+./build/cpusim_gui                # Open Program → build/hello.elf → Start
+```
+
+You can also drag-and-drop `*.elf` / `*.hex` / `*.txt` onto the GUI window. Program stdout from ECALL `write` appears in the **Program Output** tab.
+
 ### Using the GUI (Recommended for Beginners)
 
 1. **Launch the Application**

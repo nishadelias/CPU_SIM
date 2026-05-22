@@ -15,6 +15,9 @@
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QComboBox>
+#include <QPlainTextEdit>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include "SimulatorController.h"
 #include "CacheScheme.h"
 #include "BranchPredictorScheme.h"
@@ -30,6 +33,10 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow();
+
+protected:
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private slots:
     void openFile();
@@ -50,6 +57,8 @@ private:
     void setupStatusBar();
     void connectSignals();
     void updateUI();
+    void openProgramPath(const QString& filename);
+    void updateConsoleDisplay();
 
     SimulatorController* controller_;
     
@@ -84,6 +93,7 @@ private:
     RegisterWidget* registerWidget_;
     MemoryWidget* memoryWidget_;
     DependencyWidget* dependencyWidget_;
+    QPlainTextEdit* consoleWidget_;
     
     // Menu items
     QAction* actionOpen_;

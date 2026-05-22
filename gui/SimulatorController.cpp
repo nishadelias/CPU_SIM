@@ -132,24 +132,28 @@ bool SimulatorController::loadProgram(const QString& filename) {
         SimpleRAM tmp(MemoryMap::RAM_SIZE);
         ElfLoadResult er = load_elf32_into_ram(filename.toStdString(), tmp);
         if (!er.ok) {
-            qDebug() << "ELF load failed:" << QString::fromStdString(er.error);
+            lastLoadError_ = QString::fromStdString(er.error);
+            qDebug() << "ELF load failed:" << lastLoadError_;
             return false;
         }
     } else {
         SimpleRAM tmp(MemoryMap::RAM_SIZE);
         uint32_t nb = 0;
         if (!load_hex_text_file(filename.toStdString(), tmp, MemoryMap::HEX_PROGRAM_BASE, nb)) {
-            qDebug() << "Hex text load failed (unreadable or out of range)";
+            lastLoadError_ = QStringLiteral("Hex text load failed (unreadable or out of range).");
+            qDebug() << lastLoadError_;
             return false;
         }
         if (nb == 0) {
-            qDebug() << "Hex text file has no valid byte tokens (need pairs like 93 00 ...)";
+            lastLoadError_ = QStringLiteral("Hex text file has no valid byte tokens (need pairs like 93 00 ...).");
+            qDebug() << lastLoadError_;
             return false;
         }
     }
 
     lastProgramPath_ = filename;
     lastLoadElf_ = is_elf;
+    lastLoadError_.clear();
 
     QFileInfo fileInfo(filename);
     QDir dir(fileInfo.absolutePath());
