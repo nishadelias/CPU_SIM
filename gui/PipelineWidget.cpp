@@ -120,7 +120,34 @@ void PipelineWidget::updatePipelineTable(CPU* cpu) {
 }
 
 QString PipelineWidget::formatInstruction(const PipelineSnapshot& snapshot, const QString& stageName) {
-    // Helper method for formatting (can be expanded)
+    (void)snapshot;
+  (void)stageName;
     return stageName;
+}
+
+void PipelineWidget::updateDisplayLive(CPU* cpu) {
+    if (!cpu) return;
+
+    const PipelineSnapshot snapshot =
+        cpu->get_current_pipeline_state(static_cast<int>(cpu->get_statistics().total_cycles));
+    pipelineTable_->setRowCount(1);
+    const int row = 0;
+
+    pipelineTable_->setItem(row, 0, new QTableWidgetItem(QString::number(snapshot.cycle)));
+
+    auto setStage = [&](int col, bool valid, uint32_t pc, const std::string& disasm) {
+        QString text = valid ? QString("0x%1: %2").arg(pc, 0, 16).arg(QString::fromStdString(disasm))
+                             : "Empty";
+        auto* item = new QTableWidgetItem(text);
+        item->setBackground(valid ? QBrush(QColor(200, 255, 200)) : QBrush(QColor(240, 240, 240)));
+        pipelineTable_->setItem(row, col, item);
+    };
+
+    setStage(1, snapshot.if_id.valid, snapshot.if_id.pc, snapshot.if_id.disassembly);
+    setStage(2, snapshot.id_ex.valid, snapshot.id_ex.pc, snapshot.id_ex.disassembly);
+    setStage(3, snapshot.ex_mem.valid, snapshot.ex_mem.pc, snapshot.ex_mem.disassembly);
+    setStage(4, snapshot.mem_wb.valid, snapshot.mem_wb.pc, snapshot.mem_wb.disassembly);
+    pipelineTable_->setItem(row, 5, new QTableWidgetItem(snapshot.stall ? "Yes" : "No"));
+    pipelineTable_->setItem(row, 6, new QTableWidgetItem(snapshot.flush ? "Yes" : "No"));
 }
 

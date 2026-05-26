@@ -94,18 +94,15 @@ You can easily implement and test your own branch predictors! The framework prov
 #### Option 1: Build GUI Version (Recommended)
 
 ```bash
-# Create build directory
-mkdir build
-cd build
+# From project root (macOS / Linux)
+cmake -S . -B build -DBUILD_GUI=ON -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6 2>/dev/null || brew --prefix qt)"
 
-# Configure with CMake
-cmake ..
+# Build CLI + GUI
+cmake --build build -j
+# Or GUI only after a headless configure: cmake --build build --target cpusim_gui
 
-# Build
-cmake --build .
-
-# Run the GUI (macOS / Linux)
-./cpusim_gui
+# Run the GUI
+./build/cpusim_gui
 
 # Windows (Visual Studio generator — release output folder)
 # .\Release\cpusim_gui.exe
@@ -230,8 +227,8 @@ Programs that save/restore `ra` on the stack (`call`/`ret` with a normal prologu
 
 #### 5. Load and run in the GUI
 
-1. Build the simulator: `cmake -S . -B build && cmake --build build`
-2. Launch `./build/cpusim_gui`
+1. Build the simulator with the GUI enabled: `cmake -S . -B build -DBUILD_GUI=ON && cmake --build build --target cpusim_gui`
+2. Launch `./build/cpusim_gui` (not an older copy from another build folder)
 3. **Open Program** or drag-and-drop your `.elf`
 4. Confirm the file line shows **ELF (compiled C/RISC-V)** with entry and `brk`
 5. Click **Start** or **Step** — watch **Pipeline**, **Registers**, **Statistics**
@@ -294,7 +291,7 @@ CLI sanity check before using the GUI:
 3. **Load a Program**
    - Click **"Open Program"** (or use **File → Open Program**).
    - Pick either:
-     - A **hex text** file (e.g. `instruction_memory/instMem-all.txt`, `instMem-m-ext.txt`), or
+     - A **hex text** file (e.g. `instruction_memory/instMem-m-ext.txt`, `instMem-forward.txt`), or
      - A **compiled** ELF (`program.elf`) built for this simulator’s memory map.
    - The **filename** and a **format line** (ELF vs hex, entry/byte count) appear under the button.
    - **Reset** (or **Simulation → Reset**) reloads the same file from disk and reapplies cache/predictor settings.
@@ -304,7 +301,7 @@ CLI sanity check before using the GUI:
    - **Pause**: Pause the simulation (can resume with Start)
    - **Reset**: Reset the simulation to the beginning
    - **Step**: Execute one pipeline cycle at a time
-   - **Speed Slider**: Adjust execution speed (1-100 cycles per second)
+   - **Speed Slider**: Target simulation rate (1-500 cycles per second). While **Start** is active, the simulator runs in a fast mode: multiple cycles per screen refresh (~60 Hz), with tracing and heavy table updates disabled so higher speeds are reachable. **Pause** or **Step** restores full pipeline trace and memory/dependency views.
 
 5. **Compare Cache Schemes**
    - Run a program with one cache scheme
@@ -363,7 +360,7 @@ CLI sanity check before using the GUI:
 
 ```bash
 # Hex text program (same format as instruction_memory/*.txt)
-./build/cpusim instruction_memory/instMem-all.txt
+./build/cpusim instruction_memory/instMem-m-ext.txt
 
 # Compiled ELF (auto-detected)
 ./build/cpusim path/to/program.elf
@@ -372,7 +369,7 @@ CLI sanity check before using the GUI:
 ./build/cpusim instruction_memory/instMem-m-ext.txt --debug
 
 # Pipeline log file
-./build/cpusim instruction_memory/instMem-all.txt --log pipeline.log
+./build/cpusim instruction_memory/instMem-m-ext.txt --log pipeline.log
 
 # Executable / strict mode: illegal instructions and bad memory accesses halt with fault (not NOP)
 ./build/cpusim program.elf --executable
@@ -519,12 +516,17 @@ For detailed information about branch predictors and how to add custom ones, see
 - `rvc_expand_test` — compressed expansion goldens
 - `m_ext_syscall` — `instruction_memory/instMem-m-ext.txt` (`MUL` + `ECALL` exit)
 - `golden_kernel_test` — same hex kernel as above, asserts syscall exit code 42
+- `hello_elf_test` — ELF load + run via CPU API (requires RISC-V cross-compiler at configure time)
+- `load_use_test`, `forwarding_test` — pipeline hazard hex kernels
+- `fpu_decode_test`, `trap_test`, `mmu_test`, `executable_mode_test`
+- `call_ret_elf_test` — `crt0.S` + `main` with normal `call`/`ret` (requires cross-compiler)
+- `fib_print_cpusim`, `count_primes_cpusim`, `bench_smoke_test` — integration smokes (with cross-compiler)
 
 **Scripts**: `scripts/run_riscv_integration.sh` (bash) rebuilds, runs **ctest**, and checks syscall output.
 
 **Windows:** Run the same tests manually: `ctest --test-dir build` from the project root after configuring and building.
 
-**Sample hex programs** live under `instruction_memory/` (e.g. `instMem-all.txt`, `instMem-m-ext.txt`, `instMem-rvc-smoke.txt`).
+**Sample hex programs** live under `instruction_memory/` (e.g. `instMem-m-ext.txt`, `instMem-forward.txt`, `instMem-load-use.txt`, `instMem-rvc-smoke.txt`).
 
 ## 🔧 Technical Details
 
@@ -588,6 +590,8 @@ For detailed guides, see:
 - **Compilation errors**: Check that all source files are present and Qt6 Charts is installed
 
 ### GUI Won't Run
+
+- **Speed slider stops at 100**: You are likely running an old `cpusim_gui` binary. Reconfigure with `-DBUILD_GUI=ON`, then `cmake --build build --target cpusim_gui` and run `./build/cpusim_gui`. The current max is **500 cycles/sec** (see `SimLimits::MAX_SIM_SPEED_CPS`).
 
 - **Program won't load**: Use a valid **hex text** file (non-empty hex byte pairs) or a **32-bit ELF** linked for `0x00000000` / 64 KiB RAM. If the dialog fails, read the error message — ELF must be **EM_RISCV** with **PT_LOAD** segments that fit.
 - **Simulation stuck**: Check the pipeline log file (`pipeline.log`) for details

@@ -5,10 +5,12 @@
 #include "CacheScheme.h"
 #include "MemoryMap.h"
 #include "ExecutionMode.h"
+#include "Trap.h"
 #include <iomanip>
 #include <iostream>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 CPU::CPU()
 {
@@ -25,8 +27,14 @@ CPU::CPU()
         registers_fp[i] = 0.0f;
     }
     
-    // Initialize FCSR (Floating-Point Control and Status Register)
-    fcsr = 0;  // Default: round to nearest, no exceptions
+    csr_.reset();
+    ram_backing_ = nullptr;
+    sim_stdin_.clear();
+    timer_irq_period_ = 0;
+    cycles_since_timer_ = 0;
+    pending_store_valid_ = false;
+    pending_store_addr_ = 0;
+    pending_store_data_ = 0;
 
     // Initialize pipeline control
     pipeline_stall = false;
@@ -77,8 +85,9 @@ void CPU::reset() {
         previous_register_values_[i] = 0;
     }
     
-    // Reset FCSR
-    fcsr = 0;
+    csr_.reset();
+    cycles_since_timer_ = 0;
+    pending_store_valid_ = false;
     
     // Reset pipeline control
     pipeline_stall = false;
@@ -134,10 +143,211 @@ void CPU::incPC(int increment)
 }
 
 void CPU::raise_fault(FaultCause cause, uint32_t tval) {
+    deliver_fault(cause, tval);
+}
+
+void CPU::deliver_fault(FaultCause cause, uint32_t tval) {
     faulted_ = true;
     fault_cause_ = cause;
     fault_tval_ = tval;
-    halted_ = true;
+
+    uint32_t exc = ExceptionCode::IllegalInsn;
+    switch (cause) {
+        case FaultCause::IllegalInstruction:
+            exc = ExceptionCode::IllegalInsn;
+            break;
+        case FaultCause::InstructionFetchFault:
+            exc = ExceptionCode::InstAccessFault;
+            break;
+        case FaultCause::LoadAddressMisaligned:
+            exc = ExceptionCode::LoadMisaligned;
+            break;
+        case FaultCause::StoreAddressMisaligned:
+            exc = ExceptionCode::StoreMisaligned;
+            break;
+        case FaultCause::LoadFault:
+            exc = ExceptionCode::LoadAccessFault;
+            break;
+        case FaultCause::StoreFault:
+            exc = ExceptionCode::StoreAccessFault;
+            break;
+        default:
+            break;
+    }
+
+    if (csr_.traps_enabled()) {
+        deliver_trap(exc, tval, PC);
+        pipeline_flush = true;
+        if_id.valid = false;
+        id_ex.valid = false;
+    } else {
+        halted_ = true;
+    }
+}
+
+void CPU::deliver_trap(uint32_t cause, uint32_t tval, uint32_t fault_pc) {
+    const uint32_t vec = csr_.enter_trap(fault_pc, cause, tval, PrivMode::Machine);
+    PC = vec;
+    pipeline_flush = true;
+    if_id.valid = false;
+    id_ex.valid = false;
+}
+
+uint32_t CPU::translate_addr(uint32_t vaddr, bool fetch, bool store, bool& fault) {
+    fault = false;
+    uint32_t paddr = vaddr;
+    bool page_fault = false;
+    if (!mmu_.translate(vaddr, paddr, fetch, store, page_fault)) {
+        if (page_fault && csr_.traps_enabled()) {
+            const uint32_t exc = fetch ? ExceptionCode::InstPageFault
+                                       : (store ? ExceptionCode::StorePageFault : ExceptionCode::LoadPageFault);
+            deliver_trap(exc, vaddr, PC);
+            fault = true;
+            return vaddr;
+        }
+        if (execution_mode_ == ExecutionMode::Executable) {
+            deliver_fault(fetch ? FaultCause::InstructionFetchFault
+                                : (store ? FaultCause::StoreFault : FaultCause::LoadFault),
+                          vaddr);
+            fault = true;
+        }
+        return vaddr;
+    }
+    return paddr;
+}
+
+void CPU::check_timer_interrupt() {
+    if (timer_irq_period_ == 0) {
+        return;
+    }
+    cycles_since_timer_++;
+    if (cycles_since_timer_ >= timer_irq_period_) {
+        cycles_since_timer_ = 0;
+        csr_.set_mip_bit(0x80u, true);  // MTIP
+    }
+    if (csr_.traps_enabled() && csr_.global_interrupt_enabled() && csr_.pending_enabled_interrupt()) {
+        deliver_trap(ExceptionCode::TimerInterrupt, 0, PC);
+    }
+}
+
+bool CPU::detect_load_use_hazard(unsigned int rs1, unsigned int rs2) const {
+    if (id_ex.valid && id_ex.memRe && id_ex.regWrite && id_ex.rd != 0) {
+        if ((rs1 != 0 && id_ex.rd == rs1) || (rs2 != 0 && id_ex.rd == rs2)) {
+            return true;
+        }
+    }
+    if (ex_mem_prev.valid && ex_mem_prev.memRe && ex_mem_prev.regWrite && ex_mem_prev.rd != 0) {
+        if ((rs1 != 0 && ex_mem_prev.rd == rs1) || (rs2 != 0 && ex_mem_prev.rd == rs2)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int32_t CPU::forward_ex_operand(unsigned int reg, int32_t id_ex_fallback) const {
+    if (reg == 0) {
+        return 0;
+    }
+    if (ex_mem_prev.regWrite && ex_mem_prev.rd == reg) {
+        if (ex_mem_prev.memRe) {
+            return id_ex_fallback;
+        }
+        return ex_mem_prev.alu_result;
+    }
+    if (mem_wb_prev.regWrite && mem_wb_prev.rd == reg) {
+        return mem_wb_prev.memToReg ? mem_wb_prev.mem_data : mem_wb_prev.alu_result;
+    }
+    return id_ex_fallback;
+}
+
+int32_t CPU::forwarded_int_register(unsigned int r) const {
+    return forward_ex_operand(r, registers[r]);
+}
+
+bool CPU::handle_ecall_syscalls(int32_t a7, int32_t a0_in, int32_t a1, int32_t a2, bool debug) {
+    ex_mem.memRe = false;
+    ex_mem.memWr = false;
+    ex_mem.memToReg = false;
+    ex_mem.fpRegWrite = false;
+    ex_mem.rs2_data = 0;
+
+    if (a7 == 93) {
+        syscall_exit_code_ = a0_in;
+        exited_via_syscall_ = true;
+        halted_ = true;
+        ex_mem.valid = false;
+        ex_mem.regWrite = false;
+        if (debug || enable_logging) {
+            std::cout << "EX: ECALL exit(" << a0_in << ")" << std::endl;
+        }
+        return true;
+    }
+
+    if (a7 == 64) {
+        int32_t ret = 0;
+        if ((a0_in == 1 || a0_in == 2) && a2 > 0) {
+            const uint32_t base = static_cast<uint32_t>(a1);
+            for (int32_t i = 0; i < a2; i++) {
+                int32_t b = read_memory(base + static_cast<uint32_t>(i), 2);
+                const char ch = static_cast<char>(b & 0xFF);
+                sim_stdout_.push_back(ch);
+                std::cout << ch;
+                ret++;
+            }
+            std::cout.flush();
+        }
+        ex_mem.regWrite = true;
+        ex_mem.rd = 10;
+        ex_mem.alu_result = ret;
+        ex_mem.valid = true;
+        return true;
+    }
+
+    if (a7 == 63) {
+        int32_t ret = 0;
+        if (a0_in == 0 && a2 > 0) {
+            const uint32_t base = static_cast<uint32_t>(a1);
+            for (int32_t i = 0; i < a2 && static_cast<size_t>(i) < sim_stdin_.size(); i++) {
+                write_memory(base + static_cast<uint32_t>(i),
+                             static_cast<int32_t>(static_cast<unsigned char>(sim_stdin_[static_cast<size_t>(i)])),
+                             2);
+                ret++;
+            }
+        }
+        ex_mem.regWrite = true;
+        ex_mem.rd = 10;
+        ex_mem.alu_result = ret;
+        ex_mem.valid = true;
+        return true;
+    }
+
+    if (a7 == 214) {
+        const uint32_t req = static_cast<uint32_t>(a0_in);
+        const uint32_t ram_end = MemoryMap::RAM_BASE + ram_size_;
+        if (req == 0) {
+            ex_mem.alu_result = static_cast<int32_t>(heap_brk_);
+        } else {
+            if (req < heap_brk_ || req >= ram_end) {
+                ex_mem.alu_result = -1;
+            } else {
+                heap_brk_ = req;
+                ex_mem.alu_result = static_cast<int32_t>(heap_brk_);
+            }
+        }
+        ex_mem.regWrite = true;
+        ex_mem.rd = 10;
+        ex_mem.valid = true;
+        return true;
+    }
+
+    ex_mem.regWrite = true;
+    ex_mem.rd = 10;
+    ex_mem.alu_result = -1;
+    ex_mem.valid = true;
+    if (debug || enable_logging) {
+        std::cout << "EX: ECALL unknown nr " << a7 << std::endl;
+    }
+    return true;
 }
 
 bool CPU::fetch_halfword_le(uint32_t addr, uint16_t* out) {
@@ -551,6 +761,8 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
                     id_ex.ebreak = true;
                 } else if (*funct3 == 0 && imm12 == 0) {
                     id_ex.ecall = true;
+                } else if (*funct3 == 0 && imm12 == 0x302) {
+                    id_ex.mret = true;
                 } else if (*funct3 >= 1 && *funct3 <= 7) {
                     // Zicsr — CSRRW/CSRRS/CSRRC/CSRRWI/CSRRSI/CSRRCI (csr in imm[11:0])
                     id_ex.csr_access = true;
@@ -609,74 +821,104 @@ bool CPU::decode_instruction(string inst, bool *regWrite, bool *aluSrc, bool *br
             break;
         }
 
-        case 0x53: // FP arithmetic instructions (FADD.S, FSUB.S, FMUL.S, FDIV.S, etc.)
-            // Decode based on funct7 and funct3
-            id_ex.fpRegWrite = true;
-            id_ex.fpRegRead1 = true;  // Read rs1 from FP register
-            id_ex.fpRegRead2 = true;  // Read rs2 from FP register
-            *regWrite = false;  // Writing to FP register, not integer
+        case 0x53: { // OP-FP (RV32F)
+            id_ex.fpRegWrite = false;
+            id_ex.fpRegRead1 = false;
+            id_ex.fpRegRead2 = false;
+            *regWrite = false;
             *aluSrc = false;
             *branch = false;
             *memRe = false;
             *memWr = false;
             *memToReg = false;
             *upperIm = false;
-            *aluOp = 0;  // Not using ALU
-            
-            // Decode FP operation based on funct7 and funct3
-            if (*funct7 == 0x00) {
-                if (*funct3 == 0x0) {
-                    id_ex.fpOp = 0x70;  // FADD.S
-                } else if (*funct3 == 0x4) {
-                    id_ex.fpOp = 0x71;  // FSUB.S
-                } else if (*funct3 == 0x8) {
-                    id_ex.fpOp = 0x72;  // FMUL.S
-                } else if (*funct3 == 0xC) {
-                    id_ex.fpOp = 0x73;  // FDIV.S
-                } else if (*funct3 == 0x10) {
-                    id_ex.fpOp = 0x74;  // FSGNJ.S
-                } else if (*funct3 == 0x14) {
-                    id_ex.fpOp = 0x75;  // FMIN.S
-                } else if (*funct3 == 0x18) {
-                    id_ex.fpOp = 0x76;  // FMAX.S
-                } else if (*funct3 == 0x50) {
-                    id_ex.fpOp = 0x77;  // FSQRT.S
-                } else if (*funct3 == 0x60) {
-                    id_ex.fpOp = 0x78;  // FCVT.W.S (convert float to int)
-                    id_ex.fpRegRead2 = false;  // Only uses rs1
-                    *regWrite = true;  // Writes to integer register
-                } else if (*funct3 == 0x68) {
-                    id_ex.fpOp = 0x79;  // FCVT.S.W (convert int to float)
-                    id_ex.fpRegRead1 = false;  // Reads from integer register
-                    id_ex.fpRegRead2 = false;
-                } else if (*funct3 == 0x70) {
-                    id_ex.fpOp = 0x7A;  // FMV.X.W (move FP to int)
-                    id_ex.fpRegRead2 = false;
-                    *regWrite = true;  // Writes to integer register
-                } else if (*funct3 == 0x78) {
-                    id_ex.fpOp = 0x7B;  // FMV.W.X (move int to FP)
-                    id_ex.fpRegRead1 = false;  // Reads from integer register
-                    id_ex.fpRegRead2 = false;
-                }
+            *aluOp = 0;
+            id_ex.fpOp = 0;
+
+            const unsigned rs2u = *rs2;
+            if (*funct7 == 0x00 && *funct3 == 0) {
+                id_ex.fpOp = 0x70;  // FADD.S
+                id_ex.fpRegWrite = true;
+                id_ex.fpRegRead1 = id_ex.fpRegRead2 = true;
+            } else if (*funct7 == 0x08 && *funct3 == 0) {
+                id_ex.fpOp = 0x71;  // FSUB.S
+                id_ex.fpRegWrite = true;
+                id_ex.fpRegRead1 = id_ex.fpRegRead2 = true;
+            } else if (*funct7 == 0x10 && *funct3 == 0) {
+                id_ex.fpOp = 0x72;  // FMUL.S
+                id_ex.fpRegWrite = true;
+                id_ex.fpRegRead1 = id_ex.fpRegRead2 = true;
+            } else if (*funct7 == 0x18 && *funct3 == 0) {
+                id_ex.fpOp = 0x73;  // FDIV.S
+                id_ex.fpRegWrite = true;
+                id_ex.fpRegRead1 = id_ex.fpRegRead2 = true;
+            } else if (*funct7 == 0x20 && *funct3 == 0) {
+                id_ex.fpOp = 0x74;  // FSGNJ.S
+                id_ex.fpRegWrite = true;
+                id_ex.fpRegRead1 = id_ex.fpRegRead2 = true;
+            } else if (*funct7 == 0x20 && *funct3 == 1) {
+                id_ex.fpOp = 0x84;  // FSGNJN.S
+                id_ex.fpRegWrite = true;
+                id_ex.fpRegRead1 = id_ex.fpRegRead2 = true;
+            } else if (*funct7 == 0x20 && *funct3 == 2) {
+                id_ex.fpOp = 0x85;  // FSGNJX.S
+                id_ex.fpRegWrite = true;
+                id_ex.fpRegRead1 = id_ex.fpRegRead2 = true;
+            } else if (*funct7 == 0x28 && *funct3 == 0) {
+                id_ex.fpOp = 0x75;  // FMIN.S
+                id_ex.fpRegWrite = true;
+                id_ex.fpRegRead1 = id_ex.fpRegRead2 = true;
+            } else if (*funct7 == 0x28 && *funct3 == 1) {
+                id_ex.fpOp = 0x76;  // FMAX.S
+                id_ex.fpRegWrite = true;
+                id_ex.fpRegRead1 = id_ex.fpRegRead2 = true;
+            } else if (*funct7 == 0x2c && *funct3 == 0) {
+                id_ex.fpOp = 0x77;  // FSQRT.S
+                id_ex.fpRegWrite = true;
+                id_ex.fpRegRead1 = true;
+            } else if (*funct7 == 0x60 && *funct3 == 0) {
+                id_ex.fpOp = 0x78;  // FCVT.W.S
+                id_ex.fpRegRead1 = true;
+                *regWrite = true;
+            } else if (*funct7 == 0x60 && *funct3 == 1) {
+                id_ex.fpOp = 0x86;  // FCVT.WU.S
+                id_ex.fpRegRead1 = true;
+                *regWrite = true;
+            } else if (*funct7 == 0x68 && *funct3 == 0) {
+                id_ex.fpOp = 0x79;  // FCVT.S.W
+                id_ex.fpRegRead2 = false;
+                id_ex.fpRegWrite = true;
+            } else if (*funct7 == 0x68 && *funct3 == 1) {
+                id_ex.fpOp = 0x87;  // FCVT.S.WU
+                id_ex.fpRegWrite = true;
+            } else if (*funct7 == 0x70 && *funct3 == 0) {
+                id_ex.fpOp = 0x7A;  // FMV.X.W
+                id_ex.fpRegRead1 = true;
+                *regWrite = true;
+            } else if (*funct7 == 0x78 && *funct3 == 0) {
+                id_ex.fpOp = 0x7B;  // FMV.W.X
+                id_ex.fpRegWrite = true;
             } else if (*funct7 == 0x50) {
-                if (*funct3 == 0x0) {
-                    id_ex.fpOp = 0x7C;  // FLE.S (less than or equal)
-                    *regWrite = true;  // Writes comparison result to integer register
-                } else if (*funct3 == 0x1) {
-                    id_ex.fpOp = 0x7D;  // FLT.S (less than)
-                    *regWrite = true;
-                } else if (*funct3 == 0x2) {
-                    id_ex.fpOp = 0x7E;  // FEQ.S (equal)
-                    *regWrite = true;
+                id_ex.fpRegRead1 = id_ex.fpRegRead2 = true;
+                *regWrite = true;
+                if (*funct3 == 0) {
+                    id_ex.fpOp = 0x7C;
+                } else if (*funct3 == 1) {
+                    id_ex.fpOp = 0x7D;
+                } else if (*funct3 == 2) {
+                    id_ex.fpOp = 0x7E;
                 }
-            } else if (*funct7 == 0x70) {
-                if (*funct3 == 0x0) {
-                    id_ex.fpOp = 0x7F;  // FCLASS.S (classify float)
-                    id_ex.fpRegRead2 = false;
-                    *regWrite = true;  // Writes to integer register
-                }
+            } else if (*funct7 == 0x70 && *funct3 == 1) {
+                id_ex.fpOp = 0x7F;  // FCLASS.S
+                id_ex.fpRegRead1 = true;
+                *regWrite = true;
+            }
+            (void)rs2u;
+            if (id_ex.fpOp == 0 && execution_mode_ == ExecutionMode::Executable) {
+                return false;
             }
             break;
+        }
 
         default:
             if (execution_mode_ == ExecutionMode::Executable) {
@@ -1001,22 +1243,15 @@ void CPU::instruction_decode(bool debug) {
         return;
     }
 
-    // Load-use hazard detection - disabled for now, relying on forwarding
-    // TODO: Implement proper load-use hazard detection
-    /*
-    if (id_ex.memRe && id_ex.regWrite && id_ex.rd != 0 && (
-        (id_ex.rd == rs1 && rs1 != 0) || 
-        (id_ex.rd == rs2 && rs2 != 0))) {
-
+    if (detect_load_use_hazard(rs1, rs2)) {
         pipeline_stall = true;
+        id_ex.valid = false;
         if (debug) {
-            std::cout << "ID: Load-use hazard detected. Stalling pipeline." << std::endl;
-            std::cout << "    Previous instruction: rd=" << id_ex.rd << ", memRe=" << id_ex.memRe << std::endl;
-            std::cout << "    Current instruction: rs1=" << rs1 << ", rs2=" << rs2 << std::endl;
+            std::cout << "ID: Load-use hazard — stalling (rs1=" << rs1 << " rs2=" << rs2 << ")" << std::endl;
         }
         return;
     }
-    */
+    pipeline_stall = false;
 
     // Track instruction type statistics
     stats_.total_instructions++;
@@ -1123,15 +1358,6 @@ void CPU::instruction_decode(bool debug) {
     }
 }
 
-int32_t CPU::forwarded_int_register(unsigned int r) const {
-    if (r == 0) return 0;
-    if (ex_mem_prev.regWrite && ex_mem_prev.rd != 0 && ex_mem_prev.rd == r)
-        return ex_mem_prev.alu_result;
-    if (mem_wb_prev.regWrite && mem_wb_prev.rd != 0 && mem_wb_prev.rd == r)
-        return mem_wb_prev.memToReg ? mem_wb_prev.mem_data : mem_wb_prev.alu_result;
-    return registers[r];
-}
-
 void CPU::execute_stage(bool debug) {
     if (!id_ex.valid) {
         ex_mem.valid = false;
@@ -1141,7 +1367,25 @@ void CPU::execute_stage(bool debug) {
         return;
     }
 
+    if (id_ex.mret) {
+        uint32_t new_pc = 0;
+        PrivMode new_prv = PrivMode::Machine;
+        csr_.mret(new_pc, new_prv);
+        PC = new_pc;
+        pipeline_flush = true;
+        ex_mem.valid = false;
+        if (debug || enable_logging) {
+            std::cout << "EX: MRET -> PC=0x" << std::hex << new_pc << std::dec << std::endl;
+        }
+        return;
+    }
+
     if (id_ex.ebreak) {
+        if (csr_.traps_enabled()) {
+            deliver_trap(ExceptionCode::Breakpoint, 0, id_ex.pc);
+            ex_mem.valid = false;
+            return;
+        }
         halted_ = true;
         ex_mem.valid = false;
         if (debug || enable_logging) {
@@ -1150,93 +1394,33 @@ void CPU::execute_stage(bool debug) {
         return;
     }
 
-    // ECALL: Linux RISC-V syscall ABI (a7=nr, a0–a6 args; return in a0)
     if (id_ex.ecall) {
         const int32_t a7 = forwarded_int_register(17);
         const int32_t a0_in = forwarded_int_register(10);
         const int32_t a1 = forwarded_int_register(11);
         const int32_t a2 = forwarded_int_register(12);
 
-        ex_mem.memRe = false;
-        ex_mem.memWr = false;
-        ex_mem.memToReg = false;
-        ex_mem.memReadType = 0;
-        ex_mem.memWriteType = 0;
-        ex_mem.fpRegWrite = false;
-        ex_mem.rs2_data = 0;
         ex_mem.pc = id_ex.pc;
         ex_mem.instruction = id_ex.instruction;
         ex_mem.is_compressed = id_ex.is_compressed;
         ex_mem.compressed_inst = id_ex.compressed_inst;
 
-        if (a7 == 93) { // exit
-            syscall_exit_code_ = a0_in;
-            exited_via_syscall_ = true;
-            halted_ = true;
+        if (csr_.prv() == PrivMode::User && csr_.traps_enabled()) {
+            deliver_trap(ExceptionCode::EcallFromUMode, 0, id_ex.pc);
             ex_mem.valid = false;
-            ex_mem.regWrite = false;
-            if (debug || enable_logging) {
-                std::cout << "EX: ECALL exit(" << a0_in << ")" << std::endl;
-            }
             return;
         }
 
-        if (a7 == 64) { // write(fd, buf, count)
-            int32_t ret = 0;
-            if (a0_in == 1 && a2 > 0) {
-                const uint32_t base = static_cast<uint32_t>(a1);
-                for (int32_t i = 0; i < a2; i++) {
-                    int32_t b = read_memory(base + static_cast<uint32_t>(i), 2);
-                    const char ch = static_cast<char>(b & 0xFF);
-                    sim_stdout_.push_back(ch);
-                    std::cout << ch;
-                    ret++;
-                }
-                std::cout.flush();
-            }
-            ex_mem.regWrite = true;
-            ex_mem.rd = 10;
-            ex_mem.alu_result = ret;
-            ex_mem.valid = true;
-            if (debug || enable_logging) {
-                std::cout << "EX: ECALL write -> " << ret << std::endl;
-            }
-            return;
-        }
-
-        if (a7 == 214) { // brk
-            const uint32_t req = static_cast<uint32_t>(a0_in);
-            if (req == 0) {
-                ex_mem.alu_result = static_cast<int32_t>(heap_brk_);
-            } else {
-                heap_brk_ = req;
-                ex_mem.alu_result = static_cast<int32_t>(heap_brk_);
-            }
-            ex_mem.regWrite = true;
-            ex_mem.rd = 10;
-            ex_mem.valid = true;
-            if (debug || enable_logging) {
-                std::cout << "EX: ECALL brk -> 0x" << std::hex << static_cast<uint32_t>(ex_mem.alu_result) << std::dec << std::endl;
-            }
-            return;
-        }
-
-        ex_mem.regWrite = true;
-        ex_mem.rd = 10;
-        ex_mem.alu_result = -1;
-        ex_mem.valid = true;
-        if (debug || enable_logging) {
-            std::cout << "EX: ECALL unknown nr " << a7 << std::endl;
-        }
+        handle_ecall_syscalls(a7, a0_in, a1, a2, debug);
         return;
     }
 
-    // Zicsr (FCSR 0x001 fully; other CSRs read as 0, writes ignored)
     if (id_ex.csr_access) {
         const uint32_t csr = (static_cast<uint32_t>(id_ex.instruction) >> 20) & 0xFFFu;
-        uint32_t oldv = 0;
-        if (csr == 0x001) {
-            oldv = fcsr;
+        bool ok = false;
+        uint32_t oldv = csr_.read(csr, ok);
+        if (!ok) {
+            oldv = 0;
         }
         const uint32_t rs1v = (id_ex.funct3 >= 5)
             ? (id_ex.rs1 & 0x1Fu)
@@ -1272,8 +1456,9 @@ void CPU::execute_stage(bool debug) {
             default:
                 break;
         }
-        if (csr == 0x001) {
-            fcsr = newv & 0xFFFFu;
+        csr_.write(csr, newv, 0);
+        if (csr == CsrAddr::Satp) {
+            mmu_.set_satp(csr_.satp());
         }
         ex_mem.memRe = false;
         ex_mem.memWr = false;
@@ -1291,30 +1476,8 @@ void CPU::execute_stage(bool debug) {
         return;
     }
 
-    // Forward from previous-cycle EX/MEM for operand1 (rs1)
-    int32_t operand1;
-    if (ex_mem_prev.regWrite && ex_mem_prev.rd != 0 && ex_mem_prev.rd == id_ex.rs1) {
-        operand1 = ex_mem_prev.alu_result;
-    }
-    else if (mem_wb_prev.regWrite && mem_wb_prev.rd != 0 && mem_wb_prev.rd == id_ex.rs1) {
-        operand1 = mem_wb_prev.memToReg ? mem_wb_prev.mem_data : mem_wb_prev.alu_result;
-    } else {
-        operand1 = id_ex.rs1_data;
-    }
-
-    // Forward from previous-cycle EX/MEM for operand2 (rs2) unless using immediate
-    int32_t operand2;
-    if (id_ex.aluSrc) {
-        operand2 = id_ex.immediate;  // e.g., SRAI
-    }
-    else if (ex_mem_prev.regWrite && ex_mem_prev.rd != 0 && ex_mem_prev.rd == id_ex.rs2) {
-        operand2 = ex_mem_prev.alu_result;
-    }
-    else if (mem_wb_prev.regWrite && mem_wb_prev.rd != 0 && mem_wb_prev.rd == id_ex.rs2) {
-        operand2 = mem_wb_prev.memToReg ? mem_wb_prev.mem_data : mem_wb_prev.alu_result;
-    } else {
-        operand2 = id_ex.rs2_data;
-    }
+    int32_t operand1 = forward_ex_operand(id_ex.rs1, id_ex.rs1_data);
+    int32_t operand2 = id_ex.aluSrc ? id_ex.immediate : forward_ex_operand(id_ex.rs2, id_ex.rs2_data);
 
 
     // LUI operand setup
@@ -1354,9 +1517,11 @@ void CPU::execute_stage(bool debug) {
     float fp_result = 0.0f;
     int32_t fp_int_result = 0;
     if (id_ex.fpOp != 0) {
-        if (id_ex.fpOp == 0x78) {  // FCVT.W.S - convert float to int
+        if (id_ex.fpOp == 0x78) {  // FCVT.W.S
             fp_int_result = static_cast<int32_t>(fp_operand1);
-        } else if (id_ex.fpOp == 0x79) {  // FCVT.S.W - convert int to float
+        } else if (id_ex.fpOp == 0x86) {  // FCVT.WU.S
+            fp_int_result = static_cast<int32_t>(static_cast<uint32_t>(fp_operand1));
+        } else if (id_ex.fpOp == 0x79) {  // FCVT.S.W
             fp_result = static_cast<float>(operand1);
         } else if (id_ex.fpOp == 0x7A) {  // FMV.X.W - move FP to int (bitwise)
             uint32_t bits;
@@ -1518,16 +1683,7 @@ void CPU::execute_stage(bool debug) {
         }
     }
 
-    // Forward rs2_data for store operations
-    int32_t forwarded_rs2_data;
-    if (ex_mem_prev.regWrite && ex_mem_prev.rd != 0 && ex_mem_prev.rd == id_ex.rs2) {
-        forwarded_rs2_data = ex_mem_prev.alu_result;
-    }
-    else if (mem_wb_prev.regWrite && mem_wb_prev.rd != 0 && mem_wb_prev.rd == id_ex.rs2) {
-        forwarded_rs2_data = mem_wb_prev.memToReg ? mem_wb_prev.mem_data : mem_wb_prev.alu_result;
-    } else {
-        forwarded_rs2_data = id_ex.rs2_data;
-    }
+    int32_t forwarded_rs2_data = forward_ex_operand(id_ex.rs2, id_ex.rs2_data);
     
     // Forward FP rs2_data for FSW operations
     float forwarded_rs2_fp_data = id_ex.rs2_fp_data;
@@ -1603,6 +1759,9 @@ void CPU::memory_stage(bool debug) {
         } else {
         mem_data = read_memory(ex_mem.alu_result, ex_mem.memReadType);
         }
+        if (pending_store_valid_ && ex_mem.alu_result == pending_store_addr_) {
+            mem_data = pending_store_data_;
+        }
         stats_.memory_reads++;
         
         // Check if this was a cache hit or miss
@@ -1639,6 +1798,9 @@ void CPU::memory_stage(bool debug) {
         } else {
         write_memory(ex_mem.alu_result, ex_mem.rs2_data, ex_mem.memWriteType);
         }
+        pending_store_valid_ = true;
+        pending_store_addr_ = ex_mem.alu_result;
+        pending_store_data_ = ex_mem.rs2_data;
         stats_.memory_writes++;
         
         // Check if this was a cache hit or miss
@@ -1722,7 +1884,7 @@ void CPU::write_back_stage(bool debug) {
 }
 
 void CPU::run_pipeline_cycle(int cycle, bool debug) {
-    if (halted_) {
+    if (halted_ || faulted_) {
         return;
     }
 
@@ -1797,10 +1959,7 @@ void CPU::run_pipeline_cycle(int cycle, bool debug) {
         log_pipeline_state(cycle, log_stall, log_flush);
     }
 
-    // Clear pipeline stall when the load instruction has moved past the EX stage
-    if (pipeline_stall && !id_ex.memRe) {
-        pipeline_stall = false;
-    }
+    check_timer_interrupt();
 }
 
 
@@ -2155,6 +2314,10 @@ float CPU::execute_fp_operation(float operand1, float operand2, int fpOp) const 
             return operand1 / operand2;
         case 0x74: // FSGNJ.S (copy sign from rs2 to rs1)
             return copysignf(operand1, operand2);
+        case 0x84: // FSGNJN.S
+            return copysignf(operand1, -operand2);
+        case 0x85: // FSGNJX.S
+            return copysignf(operand1, copysignf(1.0f, operand1) * copysignf(1.0f, operand2) < 0 ? -operand1 : operand1);
         case 0x75: // FMIN.S
             return (operand1 < operand2) ? operand1 : operand2;
         case 0x76: // FMAX.S
@@ -2167,6 +2330,8 @@ float CPU::execute_fp_operation(float operand1, float operand2, int fpOp) const 
             return sqrtf(operand1);
         case 0x79: // FCVT.S.W (convert int to float) - operand1 is int value
             return static_cast<float>(static_cast<int32_t>(operand1));
+        case 0x87: // FCVT.S.WU
+            return static_cast<float>(static_cast<uint32_t>(operand1));
         case 0x7B: // FMV.W.X (move int to FP - bitwise copy)
             {
                 uint32_t bits = static_cast<uint32_t>(static_cast<int32_t>(operand1));

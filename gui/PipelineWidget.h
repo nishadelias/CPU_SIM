@@ -15,6 +15,7 @@ class PipelineWidget : public QWidget {
 public:
     explicit PipelineWidget(QWidget* parent = nullptr);
     void updateDisplay(CPU* cpu);
+    void updateDisplayLive(CPU* cpu);
 
 private:
     void setupUI();

@@ -9,6 +9,7 @@
 #include "ElfLoader.h"
 #include "HexLoader.h"
 #include "ExecutionMode.h"
+#include "SimLimits.h"
 
 #include <iostream>
 #include <fstream>
@@ -78,7 +79,7 @@ static void print_usage(const char* prog) {
             "  --json                  With --bench: JSON output (default CSV)\n"
             "  --cache <scheme>        direct|fa|2way|4way|8way (default direct)\n"
             "  --predictor <p>         ant|at|bimodal|gshare|tournament (default ant)\n"
-            "  --max-cycles <n>        Cycle limit (default 100000)\n";
+            "  --max-cycles <n>        Cycle limit (default 200000)\n";
 }
 
 static void run_print_results(CPU& cpu, int cycles, bool bench_json) {
@@ -122,7 +123,7 @@ int main(int argc, char* argv[]) {
     bool bench_json = false;
     CacheSchemeType cache_type = CacheSchemeType::DirectMapped;
     BranchPredictorType pred_type = BranchPredictorType::AlwaysNotTaken;
-    int max_cycles = 100000;
+    int max_cycles = SimLimits::DEFAULT_MAX_CYCLES;
 
     if (argc < 2) {
         print_usage(argv[0]);

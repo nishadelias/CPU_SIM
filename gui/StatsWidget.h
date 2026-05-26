@@ -21,6 +21,7 @@ class StatsWidget : public QWidget {
 public:
     explicit StatsWidget(QWidget* parent = nullptr);
     void updateDisplay(CPU* cpu);
+    void updateDisplayFast(CPU* cpu);
 
 private:
     void setupUI();

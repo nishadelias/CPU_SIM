@@ -77,6 +77,8 @@ private:
     QLabel* lblSpeed_;
     QSlider* speedSlider_;
     QSpinBox* speedSpinBox_;
+    QLabel* lblMaxCycles_;
+    QSpinBox* maxCyclesSpinBox_;
     QLabel* lblCacheScheme_;
     QComboBox* cacheSchemeCombo_;
     QLabel* lblBranchPredictor_;

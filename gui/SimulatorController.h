@@ -26,6 +26,9 @@ public:
     void resetSimulation();
     void stepSimulation();
     void setSpeed(int cyclesPerSecond);
+    void setMaxCycles(int maxCycles);
+    int maxCycles() const { return maxCycles_; }
+    bool isFastRunActive() const { return fastRunActive_; }
 
     CPU* getCPU() { return &cpu_; }
     bool isRunning() const { return isRunning_; }
@@ -48,6 +51,7 @@ signals:
     void simulationFinished();
     void simulationStarted();
     void simulationPaused();
+    void cycleLimitReached();
 
 private slots:
     void onTimerTick();
@@ -71,7 +75,13 @@ private:
     uint32_t elf_entry_;
     uint32_t elf_heap_brk_;
 
-    static const int MAX_CYCLES = 200000;  // Prevent infinite loops (matches CLI default scale)
+    int maxCycles_;
+    bool cycleLimitReached_;
+    bool fastRunActive_;
+    bool fileLoggingActive_;
+
+    // Sub-cycle remainder from fixed-interval timer ticks (milli-cycles).
+    int cycleMilliDebt_;
 
     void initializeMemoryHierarchy();
     void initializeBranchPredictor();
