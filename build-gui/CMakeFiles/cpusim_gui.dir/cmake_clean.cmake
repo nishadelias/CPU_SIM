@@ -1,0 +1,42 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/cpusim_gui_autogen.dir/AutogenUsed.txt"
+  "CMakeFiles/cpusim_gui_autogen.dir/ParseCache.txt"
+  "cpusim_gui_autogen"
+  "CMakeFiles/cpusim_gui.dir/ALU.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/ALU.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/CPU.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/CPU.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/CSRFile.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/CSRFile.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/ElfLoader.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/ElfLoader.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/HexLoader.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/HexLoader.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/MMU.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/MMU.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/cpusim_gui_autogen/mocs_compilation.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/cpusim_gui_autogen/mocs_compilation.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/gui/DependencyWidget.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/gui/DependencyWidget.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/gui/MainWindow.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/gui/MainWindow.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/gui/MemoryWidget.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/gui/MemoryWidget.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/gui/PipelineWidget.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/gui/PipelineWidget.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/gui/RegisterWidget.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/gui/RegisterWidget.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/gui/SimulatorController.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/gui/SimulatorController.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/gui/StatsWidget.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/gui/StatsWidget.cpp.o.d"
+  "CMakeFiles/cpusim_gui.dir/gui/main.cpp.o"
+  "CMakeFiles/cpusim_gui.dir/gui/main.cpp.o.d"
+  "cpusim_gui"
+  "cpusim_gui.pdb"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang CXX)
+  include(CMakeFiles/cpusim_gui.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()
