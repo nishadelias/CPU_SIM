@@ -12,6 +12,8 @@
 #include "HexLoader.h"
 #include "MemoryMap.h"
 #include "ExecutionMode.h"
+#include "SimLimits.h"
+#include <QSettings>
 
 static bool peek_is_elf(const QString& path) {
     QFile f(path);
@@ -51,7 +53,15 @@ SimulatorController::SimulatorController(QObject* parent)
     , lastLoadElf_(false)
     , elf_entry_(0)
     , elf_heap_brk_(0)
+    , maxCycles_(SimLimits::DEFAULT_MAX_CYCLES)
+    , cycleLimitReached_(false)
+    , fastRunActive_(false)
+    , fileLoggingActive_(false)
+    , cycleMilliDebt_(0)
 {
+    QSettings settings;
+    maxCycles_ = settings.value("simulation/maxCycles", SimLimits::DEFAULT_MAX_CYCLES).toInt();
+
     timer_ = new QTimer(this);
     connect(timer_, &QTimer::timeout, this, &SimulatorController::onTimerTick);
 
@@ -174,7 +184,10 @@ bool SimulatorController::loadProgram(const QString& filename) {
 
     resetSimulation();
 
-    cpu_.set_logging(true, logFilePath_.toStdString());
+    fileLoggingActive_ = !logFilePath_.isEmpty();
+    if (fileLoggingActive_) {
+        cpu_.set_logging(true, logFilePath_.toStdString());
+    }
 
     qDebug() << "Loaded program:" << filename << "elf:" << lastLoadElf_ << "Max PC (hex bytes):" << maxPC_;
     return true;
@@ -185,8 +198,14 @@ void SimulatorController::startSimulation() {
         return;
     }
 
+    // Keep tracing on so pipeline/memory/dependency tabs populate; disable file I/O only.
+    fastRunActive_ = true;
+    cpu_.enable_tracing(true);
+    cpu_.set_logging(false, "");
+
+    cycleMilliDebt_ = 0;
     isRunning_ = true;
-    timer_->start(1000 / cyclesPerSecond_);
+    timer_->start(SimLimits::GUI_REFRESH_INTERVAL_MS);
     emit simulationStarted();
 }
 
@@ -197,6 +216,15 @@ void SimulatorController::pauseSimulation() {
 
     isRunning_ = false;
     timer_->stop();
+
+    if (fastRunActive_) {
+        fastRunActive_ = false;
+        cpu_.enable_tracing(true);
+        if (fileLoggingActive_ && !logFilePath_.isEmpty()) {
+            cpu_.set_logging(true, logFilePath_.toStdString());
+        }
+    }
+
     emit simulationPaused();
 }
 
@@ -214,11 +242,13 @@ void SimulatorController::resetSimulation() {
     cpu_.set_branch_predictor(branch_predictor_);
     applyCpuLoadState();
 
-    if (!logFilePath_.isEmpty() && !lastProgramPath_.isEmpty()) {
+    if (fileLoggingActive_ && !logFilePath_.isEmpty() && !lastProgramPath_.isEmpty()) {
         cpu_.set_logging(true, logFilePath_.toStdString());
     }
 
     currentCycle_ = 0;
+    cycleMilliDebt_ = 0;
+    fastRunActive_ = false;
 }
 
 void SimulatorController::stepSimulation() {
@@ -226,9 +256,11 @@ void SimulatorController::stepSimulation() {
         return;
     }
 
-    if (currentCycle_ >= MAX_CYCLES) {
+    if (currentCycle_ >= maxCycles_) {
         qDebug() << "Maximum cycles reached. Stopping simulation.";
+        cycleLimitReached_ = true;
         pauseSimulation();
+        emit cycleLimitReached();
         emit simulationFinished();
         return;
     }
@@ -243,30 +275,51 @@ void SimulatorController::stepSimulation() {
     }
 }
 
+void SimulatorController::setMaxCycles(int maxCycles) {
+    maxCycles_ = qMax(1000, maxCycles);
+    QSettings settings;
+    settings.setValue("simulation/maxCycles", maxCycles_);
+}
+
 void SimulatorController::setSpeed(int cyclesPerSecond) {
-    cyclesPerSecond_ = qMax(1, qMin(1000, cyclesPerSecond));
+    cyclesPerSecond_ = qMax(1, qMin(SimLimits::MAX_SIM_SPEED_CPS, cyclesPerSecond));
     if (isRunning_) {
-        timer_->setInterval(1000 / cyclesPerSecond_);
+        timer_->start(SimLimits::GUI_REFRESH_INTERVAL_MS);
     }
 }
 
 void SimulatorController::onTimerTick() {
-    if (currentCycle_ >= MAX_CYCLES) {
-        qDebug() << "Maximum cycles reached. Stopping simulation.";
-        pauseSimulation();
-        emit simulationFinished();
+    // Accumulate fractional cycles across 16 ms ticks so low speeds (e.g. 1 cps)
+    // are not rounded up to ~62 cps by a minimum batch of 1.
+    cycleMilliDebt_ += cyclesPerSecond_ * SimLimits::GUI_REFRESH_INTERVAL_MS;
+    const int batch = cycleMilliDebt_ / 1000;
+    cycleMilliDebt_ %= 1000;
+    if (batch <= 0) {
         return;
     }
 
-    currentCycle_++;
-    cpu_.run_pipeline_cycle(currentCycle_, false);
+    for (int i = 0; i < batch; ++i) {
+        if (currentCycle_ >= maxCycles_) {
+            qDebug() << "Maximum cycles reached. Stopping simulation.";
+            cycleLimitReached_ = true;
+            pauseSimulation();
+            emit cycleLimitReached();
+            emit simulationFinished();
+            return;
+        }
+
+        currentCycle_++;
+        cpu_.run_pipeline_cycle(currentCycle_, false);
+
+        if (simulationShouldFinish()) {
+            pauseSimulation();
+            emit cycleCompleted(currentCycle_);
+            emit simulationFinished();
+            return;
+        }
+    }
 
     emit cycleCompleted(currentCycle_);
-
-    if (simulationShouldFinish()) {
-        pauseSimulation();
-        emit simulationFinished();
-    }
 }
 
 void SimulatorController::initializeMemoryHierarchy() {

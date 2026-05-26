@@ -13,8 +13,13 @@
 #include "MemoryIf.h"
 #include "BranchPredictorScheme.h"
 #include "ExecutionMode.h"
+#include "CSRFile.h"
+#include "Trap.h"
+#include "MMU.h"
 
 using namespace std;
+
+class SimpleRAM;
 
 // Pipeline register structures
 struct IF_ID_Register {
@@ -71,6 +76,7 @@ struct ID_EX_Register {
     uint16_t compressed_inst;  // Original compressed instruction if applicable
     bool ebreak;           // SYSTEM: EBREAK (halt simulation)
     bool ecall;            // SYSTEM: ECALL (syscall emulation)
+    bool mret;             // SYSTEM: MRET
     bool valid;
 
     ID_EX_Register() : regWrite(false), aluSrc(false), branch(false), memRe(false),
@@ -80,7 +86,8 @@ struct ID_EX_Register {
                       csr_access(false),
                       opcode(0), rd(0), funct3(0), rs1(0), rs2(0), rs3(0), funct7(0),
                       rs1_data(0), rs2_data(0), immediate(0), rs1_fp_data(0.0f), rs2_fp_data(0.0f), rs3_fp_data(0.0f),
-                      pc(0), instruction(0), is_compressed(false), compressed_inst(0), ebreak(false), ecall(false), valid(false) {}
+                      pc(0), instruction(0), is_compressed(false), compressed_inst(0),
+                      ebreak(false), ecall(false), mret(false), valid(false) {}
 };
 
 struct EX_MEM_Register {
@@ -322,7 +329,15 @@ private:
     uint32_t fault_tval_; 
     int32_t registers[32];
     float registers_fp[32];  // Floating-point registers (f0-f31)
-    uint32_t fcsr;  // Floating-Point Control and Status Register
+    CSRFile csr_;
+    MMU mmu_;
+    SimpleRAM* ram_backing_;
+    std::string sim_stdin_;
+    uint32_t timer_irq_period_;
+    uint32_t cycles_since_timer_;
+    bool pending_store_valid_;
+    uint32_t pending_store_addr_;
+    int32_t pending_store_data_;
     const string REGISTER_NAMES[32] = {"Zero","ra","sp","gp","tp","t0","t1","t2",
                                     "s0/fp","s1","a0","a1","a2","a3","a4","a5",
                                     "a6","a7","s2","s3","s4","s5","s6","s7",
@@ -361,6 +376,13 @@ private:
     uint32_t heap_brk_;  // brk() heap pointer for ECALL (Linux nr 214)
 
     int32_t forwarded_int_register(unsigned int r) const;
+    int32_t forward_ex_operand(unsigned int reg, int32_t id_ex_fallback) const;
+    bool detect_load_use_hazard(unsigned int rs1, unsigned int rs2) const;
+    void deliver_trap(uint32_t cause, uint32_t tval, uint32_t fault_pc);
+    void deliver_fault(FaultCause cause, uint32_t tval);
+    bool handle_ecall_syscalls(int32_t a7, int32_t a0_in, int32_t a1, int32_t a2, bool debug);
+    void check_timer_interrupt();
+    uint32_t translate_addr(uint32_t vaddr, bool fetch, bool store, bool& fault);
 
     // Logging
     bool enable_logging;
@@ -474,6 +496,14 @@ public:
 
     void set_pc(uint32_t pc) { PC = pc; }
     void set_heap_brk(uint32_t v) { heap_brk_ = v; }
+    void set_ram_backing(SimpleRAM* ram) { ram_backing_ = ram; mmu_.set_ram(ram); }
+    void set_traps_enabled(bool on) { csr_.set_traps_enabled(on); }
+    void set_timer_irq_period(uint32_t cycles) { timer_irq_period_ = cycles; }
+    void set_sim_stdin(const std::string& s) { sim_stdin_ = s; }
+    PrivMode get_priv_mode() const { return csr_.prv(); }
+    void set_priv_mode(PrivMode p) { csr_.set_prv(p); }
+    CSRFile& csr_file() { return csr_; }
+    const CSRFile& csr_file() const { return csr_; }
 
     bool is_faulted() const { return faulted_; }
     FaultCause get_fault_cause() const { return fault_cause_; }

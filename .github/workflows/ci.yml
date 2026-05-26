@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-test-ubuntu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build \
+            qt6-base-dev qt6-charts-dev \
+            gcc-riscv64-unknown-elf
+
+      - name: Configure (headless)
+        run: cmake -S . -B build -G Ninja -DBUILD_GUI=OFF
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: CTest
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Integration script
+        run: bash scripts/run_riscv_integration.sh
+
+  build-test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install cmake ninja qt@6 riscv64-elf-gcc
+          echo "$(brew --prefix qt@6)/bin" >> $GITHUB_PATH
+
+      - name: Configure (headless)
+        run: cmake -S . -B build -G Ninja -DBUILD_GUI=OFF -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)"
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: CTest
+        run: ctest --test-dir build --output-on-failure

@@ -50,5 +50,17 @@ build_one "${ROOT}/examples/hello.c" "${BUILD}/hello.elf"
 build_one "${ROOT}/examples/fib_print.c" "${BUILD}/fib_print.elf"
 build_one "${ROOT}/examples/count_primes.c" "${BUILD}/count_primes.elf"
 
+echo "  call_ret (crt0 + main) -> ${BUILD}/call_ret.elf"
+"${GCC}" "${ARCH_FLAGS[@]}" "${LDFLAGS[@]}" \
+  "${ROOT}/examples/crt0.S" "${ROOT}/examples/call_ret_main.c" \
+  -I "${ROOT}/examples" -o "${BUILD}/call_ret.elf"
+
+ARCH_AFC=(-march=rv32imafc -mabi=ilp32 -O0 -ffreestanding -fno-builtin -fno-pie -mno-relax)
+if [[ -f "${ROOT}/examples/fp_demo.c" ]]; then
+  echo "  fp_demo -> ${BUILD}/fp_demo.elf"
+  "${GCC}" "${ARCH_AFC[@]}" "${LDFLAGS[@]}" "${ROOT}/examples/fp_demo.c" \
+    -I "${ROOT}/examples" -o "${BUILD}/fp_demo.elf"
+fi
+
 echo "Done:"
-file "${BUILD}/hello.elf" "${BUILD}/fib_print.elf" "${BUILD}/count_primes.elf" 2>/dev/null || true
+file "${BUILD}/hello.elf" "${BUILD}/fib_print.elf" "${BUILD}/count_primes.elf" "${BUILD}/call_ret.elf" 2>/dev/null || true

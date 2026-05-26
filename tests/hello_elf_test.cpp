@@ -5,6 +5,7 @@
 #include "MemoryMap.h"
 #include "ElfLoader.h"
 #include "ExecutionMode.h"
+#include "test_common.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -35,7 +36,7 @@ int main(int argc, char** argv) {
     cpu.set_register_value(2, static_cast<int32_t>(MemoryMap::STACK_TOP - 16));
     cpu.set_execution_mode(ExecutionMode::Educational);
 
-    const int max_cycles = 50000;
+    const int max_cycles = TestCommon::DEFAULT_TEST_MAX_CYCLES;
     int c = 0;
     while (c < max_cycles) {
         ++c;

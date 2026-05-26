@@ -51,6 +51,12 @@ void StatsWidget::updateDisplay(CPU* cpu) {
     updatePerformanceMetrics(cpu);
 }
 
+void StatsWidget::updateDisplayFast(CPU* cpu) {
+    if (!cpu) return;
+    updateStatisticsTable(cpu);
+    updatePerformanceMetrics(cpu);
+}
+
 void StatsWidget::updateStatisticsTable(CPU* cpu) {
     const auto& stats = cpu->get_statistics();
     

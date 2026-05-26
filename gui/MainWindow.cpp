@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "SimLimits.h"
 #include <QApplication>
 #include <QMessageBox>
 #include <QFileDialog>
@@ -84,14 +85,23 @@ void MainWindow::setupUI() {
     QFormLayout* speedLayout = new QFormLayout();
     lblSpeed_ = new QLabel("Speed:", controlGroup);
     speedSlider_ = new QSlider(Qt::Horizontal, controlGroup);
-    speedSlider_->setRange(1, 100);
+    speedSlider_->setRange(1, SimLimits::MAX_SIM_SPEED_CPS);
+    speedSlider_->setPageStep(50);
+    speedSlider_->setTickInterval(50);
+    speedSlider_->setTickPosition(QSlider::TicksBelow);
     speedSlider_->setValue(10);
     speedSpinBox_ = new QSpinBox(controlGroup);
-    speedSpinBox_->setRange(1, 100);
+    speedSpinBox_->setRange(1, SimLimits::MAX_SIM_SPEED_CPS);
     speedSpinBox_->setValue(10);
     speedSpinBox_->setSuffix(" cycles/sec");
     speedLayout->addRow(lblSpeed_, speedSlider_);
     speedLayout->addRow("", speedSpinBox_);
+    lblMaxCycles_ = new QLabel("Max cycles:", controlGroup);
+    maxCyclesSpinBox_ = new QSpinBox(controlGroup);
+    maxCyclesSpinBox_->setRange(1000, 10000000);
+    maxCyclesSpinBox_->setSingleStep(10000);
+    maxCyclesSpinBox_->setValue(controller_->maxCycles());
+    speedLayout->addRow(lblMaxCycles_, maxCyclesSpinBox_);
     controlGroupLayout->addLayout(speedLayout);
     
     // Cache scheme selection
@@ -204,6 +214,12 @@ void MainWindow::connectSignals() {
         speedSlider_->setValue(value);
     });
     connect(speedSlider_, &QSlider::valueChanged, this, &MainWindow::onSpeedChanged);
+    connect(maxCyclesSpinBox_, QOverload<int>::of(&QSpinBox::valueChanged), [this](int v) {
+        controller_->setMaxCycles(v);
+    });
+    connect(controller_, &SimulatorController::cycleLimitReached, this, [this]() {
+        lblStatus_->setText("Cycle limit reached");
+    });
     
     // Cache scheme selection
     connect(cacheSchemeCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged), 
@@ -340,9 +356,18 @@ void MainWindow::stepSimulation() {
 
 void MainWindow::onCycleCompleted(int cycle) {
     lblCycle_->setText(QString("Cycle: %1").arg(cycle));
-    
-    // Update all widgets
+
     CPU* cpu = controller_->getCPU();
+    if (controller_->isFastRunActive()) {
+        pipelineWidget_->updateDisplay(cpu);
+        statsWidget_->updateDisplayFast(cpu);
+        registerWidget_->updateDisplay(cpu);
+        memoryWidget_->updateDisplay(cpu);
+        dependencyWidget_->updateDisplay(cpu);
+        updateConsoleDisplay();
+        return;
+    }
+
     pipelineWidget_->updateDisplay(cpu);
     statsWidget_->updateDisplay(cpu);
     registerWidget_->updateDisplay(cpu);
@@ -356,6 +381,14 @@ void MainWindow::onSimulationFinished() {
     updateUI();
     // Disable step button when finished
     btnStep_->setEnabled(false);
+
+    CPU* cpu = controller_->getCPU();
+    pipelineWidget_->updateDisplay(cpu);
+    statsWidget_->updateDisplay(cpu);
+    registerWidget_->updateDisplay(cpu);
+    memoryWidget_->updateDisplay(cpu);
+    dependencyWidget_->updateDisplay(cpu);
+    updateConsoleDisplay();
 }
 
 void MainWindow::onSpeedChanged(int value) {
