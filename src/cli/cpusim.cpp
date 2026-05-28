@@ -84,6 +84,15 @@ static void print_usage(const char* prog) {
 
 static void run_print_results(CPU& cpu, int cycles, bool bench_json) {
     const CPUStatistics& st = cpu.get_statistics();
+    const BranchPredictorScheme* bp = cpu.get_branch_predictor();
+    uint64_t bp_correct = 0;
+    uint64_t bp_incorrect = 0;
+    double bp_accuracy = 0.0;
+    if (bp) {
+        bp_correct = bp->correct_predictions();
+        bp_incorrect = bp->incorrect_predictions();
+        bp_accuracy = bp->getAccuracy();
+    }
     if (bench_json) {
         cout << "{\"cycles\":" << cycles
              << ",\"instructions_retired\":" << st.instructions_retired
@@ -96,6 +105,9 @@ static void run_print_results(CPU& cpu, int cycles, bool bench_json) {
              << ",\"branch_mispredictions\":" << st.branch_mispredictions
              << ",\"branch_taken\":" << st.branch_taken_count
              << ",\"branch_not_taken\":" << st.branch_not_taken_count
+             << ",\"branch_predictor_correct\":" << bp_correct
+             << ",\"branch_predictor_incorrect\":" << bp_incorrect
+             << ",\"branch_predictor_accuracy\":" << bp_accuracy
              << ",\"exited_syscall\":" << (cpu.exited_via_syscall() ? "true" : "false")
              << ",\"syscall_exit_code\":" << cpu.get_syscall_exit_code()
              << ",\"faulted\":" << (cpu.is_faulted() ? "true" : "false")
@@ -111,6 +123,9 @@ static void run_print_results(CPU& cpu, int cycles, bool bench_json) {
         cout << "stalls," << st.stall_count << "\n";
         cout << "flushes," << st.flush_count << "\n";
         cout << "branch_mispredictions," << st.branch_mispredictions << "\n";
+        cout << "branch_predictor_correct," << bp_correct << "\n";
+        cout << "branch_predictor_incorrect," << bp_incorrect << "\n";
+        cout << "branch_predictor_accuracy," << bp_accuracy << "\n";
     }
 }
 
