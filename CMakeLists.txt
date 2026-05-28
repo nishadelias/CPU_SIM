@@ -6,16 +6,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_GUI "Build Qt6 GUI (cpusim_gui)" ON)
 
+set(SIM_INCLUDE_DIRS
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/memory
+    ${CMAKE_SOURCE_DIR}/src/loaders
+)
+
 set(LOADER_SOURCES
-    ElfLoader.cpp
-    HexLoader.cpp
+    src/loaders/ElfLoader.cpp
+    src/loaders/HexLoader.cpp
 )
 
 set(CPU_SOURCES
-    CPU.cpp
-    ALU.cpp
-    CSRFile.cpp
-    MMU.cpp
+    src/core/CPU.cpp
+    src/core/ALU.cpp
+    src/core/CSRFile.cpp
+    src/core/MMU.cpp
 )
 
 if(BUILD_GUI)
@@ -57,19 +63,19 @@ if(BUILD_GUI)
         Qt6::Widgets
         Qt6::Charts
     )
-    target_include_directories(cpusim_gui PRIVATE .)
+    target_include_directories(cpusim_gui PRIVATE ${SIM_INCLUDE_DIRS})
 endif()
 
 add_executable(cpusim
     ${CPU_SOURCES}
     ${LOADER_SOURCES}
-    cpusim.cpp
+    src/cli/cpusim.cpp
 )
-target_include_directories(cpusim PRIVATE .)
+target_include_directories(cpusim PRIVATE ${SIM_INCLUDE_DIRS})
 
 function(add_cpu_test target source)
     add_executable(${target} ${source} ${CPU_SOURCES} ${LOADER_SOURCES})
-    target_include_directories(${target} PRIVATE . ${CMAKE_SOURCE_DIR}/tests)
+    target_include_directories(${target} PRIVATE ${SIM_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR}/tests)
 endfunction()
 
 add_cpu_test(rvc_expand_test tests/rvc_expand_test.cpp)

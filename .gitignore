@@ -1,5 +1,6 @@
 # Build directories
 build/
+build-gui/
 cmake-build-*/
 *.pro.user
 *.pro.user.*

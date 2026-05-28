@@ -46,7 +46,7 @@ To add a new cache scheme, follow these steps:
 
 ### Step 1: Create Your Cache Class
 
-Create a new class that inherits from `CacheScheme` in `Cache.h`:
+Create a new class that inherits from `CacheScheme` in [`src/memory/Cache.h`](src/memory/Cache.h):
 
 ```cpp
 class YourCustomCache : public CacheScheme {
@@ -94,7 +94,7 @@ private:
 
 ### Step 2: Add to CacheSchemeType Enum
 
-Add your new cache type to the enum in `CacheScheme.h`:
+Add your new cache type to the enum in [`src/memory/CacheScheme.h`](src/memory/CacheScheme.h):
 
 ```cpp
 enum class CacheSchemeType {
@@ -109,7 +109,7 @@ enum class CacheSchemeType {
 
 ### Step 3: Update the Factory Function
 
-Add a case for your cache in the `createCacheScheme` function in `Cache.h`:
+Add a case for your cache in the `createCacheScheme` function in [`src/memory/Cache.h`](src/memory/Cache.h):
 
 ```cpp
 inline CacheScheme* createCacheScheme(CacheSchemeType type, MemoryDevice* lower, 
@@ -133,7 +133,7 @@ cacheSchemeCombo_->addItem("Your Cache Name",
                            static_cast<int>(CacheSchemeType::YourCustomCache));
 ```
 
-Also add it to the helper function in `CacheScheme.h`:
+Also add it to the helper function in [`src/memory/CacheScheme.h`](src/memory/CacheScheme.h):
 
 ```cpp
 inline std::string cacheSchemeTypeToString(CacheSchemeType type) {

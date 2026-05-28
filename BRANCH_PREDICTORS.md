@@ -82,7 +82,7 @@ To add a new branch predictor, follow these steps:
 
 ### Step 1: Create Your Predictor Class
 
-Create a new class that inherits from `BranchPredictorScheme` in `BranchPredictor.h`:
+Create a new class that inherits from `BranchPredictorScheme` in [`src/memory/BranchPredictor.h`](src/memory/BranchPredictor.h):
 
 ```cpp
 class YourCustomPredictor : public BranchPredictorScheme {
@@ -159,7 +159,7 @@ private:
 
 ### Step 2: Add to BranchPredictorType Enum
 
-Add your new predictor type to the enum in `BranchPredictorScheme.h`:
+Add your new predictor type to the enum in [`src/memory/BranchPredictorScheme.h`](src/memory/BranchPredictorScheme.h):
 
 ```cpp
 enum class BranchPredictorType {
@@ -174,7 +174,7 @@ enum class BranchPredictorType {
 
 ### Step 3: Update the Factory Function
 
-Add a case for your predictor in the `createBranchPredictor` function in `BranchPredictor.h`:
+Add a case for your predictor in the `createBranchPredictor` function in [`src/memory/BranchPredictor.h`](src/memory/BranchPredictor.h):
 
 ```cpp
 inline BranchPredictorScheme* createBranchPredictor(BranchPredictorType type) {
@@ -197,7 +197,7 @@ branchPredictorCombo_->addItem("Your Predictor Name",
                                static_cast<int>(BranchPredictorType::YourCustomPredictor));
 ```
 
-Also add it to the helper function in `BranchPredictorScheme.h`:
+Also add it to the helper function in [`src/memory/BranchPredictorScheme.h`](src/memory/BranchPredictorScheme.h):
 
 ```cpp
 inline std::string branchPredictorTypeToString(BranchPredictorType type) {

@@ -1,5 +1,7 @@
 # RISC-V CPU Simulator
 
+[![CI](https://github.com/nishadelias/CPU_SIM/actions/workflows/ci.yml/badge.svg)](https://github.com/nishadelias/CPU_SIM/actions/workflows/ci.yml)
+
 A comprehensive, cycle-accurate RISC-V CPU simulator with a graphical user interface. This project simulates a 5-stage pipelined RISC-V processor, complete with cache memory, instruction execution, and detailed performance statistics. Perfect for learning computer architecture, understanding how CPUs work, and visualizing pipeline execution.
 
 **✨ Key Educational Features**: The simulator includes **extensible frameworks** that allow you to easily implement and test your own custom components! 
@@ -25,7 +27,7 @@ This project simulates a **RISC-V CPU** - a simplified but realistic processor t
 
 **For Command-Line Version:**
 - C++ compiler (g++ or clang++)
-- Make or CMake
+- CMake 3.16 or higher
 
 **For GUI Version:**
 - Qt6 (Core, Widgets, Charts modules)
@@ -57,6 +59,16 @@ sudo apt-get install qt6-base-dev qt6-charts-dev cmake build-essential
 
 **Path separators:** Examples below use `/` (macOS, Linux, Git Bash, WSL). On **Windows Command Prompt or PowerShell**, use backslashes or quoted paths, e.g. `build\Release\cpusim_gui.exe`.
 
+## 👨‍🏫 For Instructors
+
+This simulator is designed for computer architecture courses where students visualize pipeline behavior and experiment with cache and branch-predictor designs.
+
+- **[INSTRUCTOR.md](INSTRUCTOR.md)** — 10-minute demo script, model assumptions, recommended programs, and student extension workflow
+- **[CACHE_SCHEMES.md](CACHE_SCHEMES.md)** — how to add custom cache replacement policies
+- **[BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md)** — how to add custom branch predictors
+- **[GUI_BUILD.md](GUI_BUILD.md)** — Qt build instructions
+- **Pre-demo check:** run `./scripts/demo.sh` to verify build and canned comparisons
+
 ## 🎓 Educational Focus: Extensible Frameworks
 
 **One of the key educational features of this simulator is the extensible frameworks for both caches and branch predictors.** 
@@ -66,7 +78,7 @@ sudo apt-get install qt6-base-dev qt6-charts-dev cmake build-essential
 You can easily implement and test your own cache schemes! The framework provides:
 - A simple interface (`CacheScheme`) that any cache implementation must follow
 - Built-in cache statistics tracking (hits, misses, hit rates)
-- Seamless integration with the GUI - your custom cache will automatically appear in the dropdown
+- GUI integration after wiring — add your enum, factory case, and dropdown entry (see [CACHE_SCHEMES.md](CACHE_SCHEMES.md))
 - Examples of different cache organizations (direct-mapped, fully associative, set-associative) to learn from
 
 **Want to add your own cache scheme?** See the [CACHE_SCHEMES.md](CACHE_SCHEMES.md) guide for step-by-step instructions, code examples, and implementation guidelines. Perfect for:
@@ -80,7 +92,7 @@ You can easily implement and test your own cache schemes! The framework provides
 You can easily implement and test your own branch predictors! The framework provides:
 - A simple interface (`BranchPredictorScheme`) that any predictor implementation must follow
 - Built-in prediction statistics tracking (correct/incorrect predictions, accuracy)
-- Seamless integration with the GUI - your custom predictor will automatically appear in the dropdown
+- GUI integration after wiring — add your enum, factory case, and dropdown entry (see [BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md))
 - Examples of different prediction algorithms (Always Not Taken, Bimodal, GShare, Tournament) to learn from
 
 **Want to add your own branch predictor?** See the [BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md) guide for step-by-step instructions, code examples, and implementation guidelines. Perfect for:
@@ -384,39 +396,40 @@ Use `--help`-style usage: run `cpusim` with no arguments to print the usage mess
 
 ## 📁 Project Structure
 
+Source code is grouped to mirror CPU architecture layers:
+
 ```
 CPU_SIM/
-├── CPU.cpp/h              # Main CPU implementation and pipeline
-├── ALU.cpp/h              # Arithmetic Logic Unit
-├── Cache.h                # Cache implementations
-├── CacheScheme.h          # Cache scheme framework
-├── BranchPredictor.h        # Branch predictor implementations
-├── BranchPredictorScheme.h
-├── MemoryIf.h             # Memory interface abstraction
-├── cpusim.cpp             # Command-line simulator entry point
-├── CMakeLists.txt         # Build configuration (cpusim, cpusim_gui, unit tests)
-├── MemoryMap.h            # RAM size / base addresses for the execution environment
-├── ElfLoader.cpp/h        # ELF32 PT_LOAD loader
-├── HexLoader.cpp/h        # Legacy hex text loader
-├── ExecutionMode.h        # Educational vs executable (strict traps)
-├── examples/
-│   ├── linker.ld          # Link for 64 KiB RAM at 0x00000000
-│   ├── crt0.S             # Optional _start (stack, call main, ECALL exit)
-│   ├── simlib.h           # Syscall helpers (write, exit, decimal print)
-│   ├── hello.c            # Minimal exit-42 demo
-│   ├── count_primes.c     # Prime sieve 2..400 (longer nested-loop demo)
-│   └── fib_print.c        # 24 Fibonacci lines + stdout
+├── src/
+│   ├── core/              # Datapath + control (pipeline, ALU, CSR, MMU)
+│   │   ├── CPU.cpp/h      # 5-stage pipeline (IF/ID/EX/MEM/WB)
+│   │   ├── ALU.cpp/h      # Integer arithmetic logic unit
+│   │   ├── CSRFile.cpp/h  # Control/status registers
+│   │   ├── MMU.cpp/h      # Address translation (Sv32)
+│   │   ├── Trap.h         # Exception/fault types
+│   │   ├── ExecutionMode.h
+│   │   └── SimLimits.h
+│   ├── memory/            # Memory hierarchy + branch prediction
+│   │   ├── MemoryIf.h     # MemoryDevice abstraction + SimpleRAM
+│   │   ├── MemoryMap.h    # RAM size / base addresses
+│   │   ├── Cache.h        # Cache implementations
+│   │   ├── CacheScheme.h  # Cache scheme framework
+│   │   ├── BranchPredictor.h
+│   │   └── BranchPredictorScheme.h
+│   ├── loaders/           # Program loading (hex text + ELF32)
+│   │   ├── ElfLoader.cpp/h
+│   │   └── HexLoader.cpp/h
+│   └── cli/
+│       └── cpusim.cpp     # Command-line simulator entry point
+├── gui/                   # Qt6 GUI (visualization layer)
+├── tests/                 # Unit and integration tests
+├── examples/              # Sample RV32 C programs + linker script
+├── instruction_memory/    # Hex programs for teaching/tests
+├── scripts/               # build_example_elf.sh, demo.sh, CI helpers
+├── CMakeLists.txt
 ├── CACHE_SCHEMES.md
 ├── BRANCH_PREDICTORS.md
-├── scripts/
-│   ├── build_example_elf.sh       # Build hello.elf, fib_print.elf, count_primes.elf
-│   └── run_riscv_integration.sh   # Build + ctest + M/syscall smoke check (bash: macOS/Linux)
-├── tests/
-│   ├── rvc_expand_test.cpp        # Compressed-instruction expansion tests
-│   └── golden_kernel_test.cpp     # Hex kernel syscall smoke test
-├── gui/                   # Qt6 GUI
-├── instruction_memory/   # Hex programs (two hex chars per byte, whitespace-separated)
-└── build/                 # CMake output (cpusim, cpusim_gui, tests)
+└── INSTRUCTOR.md
 ```
 
 ## 🎯 Features
@@ -508,6 +521,18 @@ CPU_SIM/
 For detailed information about cache schemes and how to add custom ones, see [CACHE_SCHEMES.md](CACHE_SCHEMES.md).
 
 For detailed information about branch predictors and how to add custom ones, see [BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md).
+
+## ⚠️ Limitations
+
+This simulator prioritizes teaching clarity over full ISA compliance:
+
+- **64 KiB RAM cap** — programs and ELF segments must fit in 64 KiB at address `0x00000000`
+- **Unified cache** — single 4 KiB / 32-byte-line cache for both instruction fetch and data access (not split I/D)
+- **Write-through only** — no write-back or write-no-allocate policies built in
+- **Partial RV32IMCF** — not a formal compliance suite; see [Features](#-features) for supported instructions
+- **`call main` / `ret`** — programs that save/restore `ra` on the stack may misbehave due to a forwarding limitation; use the `_start` + [examples/simlib.h](examples/simlib.h) pattern for reliable demos
+- **Branch prediction scope** — only conditional branches (`BEQ`, `BNE`, etc.); JAL/JALR always taken and bypass the predictor
+- **No miss-cycle penalty** — cache misses are counted in statistics but do not add extra stall cycles
 
 ## 🧪 Tests
 
@@ -634,10 +659,10 @@ are welcome!
 
 ## 📄 License
 
-This project is open source and available for educational use.
+This project is licensed under the [MIT License](LICENSE) and available for educational use.
 
 ---
 
 **Built with passion for computer architecture and RISC-V technology** 🖥️⚡
 
-For detailed GUI build instructions, see `GUI_BUILD.md`.
+For detailed GUI build instructions, see [GUI_BUILD.md](GUI_BUILD.md).
