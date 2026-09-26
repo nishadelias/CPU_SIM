@@ -6,6 +6,7 @@
 #include "MemoryMap.h"
 #include "ExecutionMode.h"
 #include "Trap.h"
+#include "isa/IsaFactory.h"
 #include <iomanip>
 #include <iostream>
 #include <cmath>
@@ -21,6 +22,9 @@ CPU::CPU()
     faulted_ = false;
     fault_cause_ = FaultCause::None;
     fault_tval_ = 0;
+
+    isa_ = create_isa_backend(IsaKind::Riscv32);
+    cpsr_ = ArmCpsr{};
 
     for (int i = 0; i < 32; i++) {
         registers[i] = 0;
@@ -127,9 +131,12 @@ void CPU::reset() {
     for (int i = 0; i < 32; ++i) {
         reg_last_write_[i] = RegLastWrite();
     }
+
+    cpsr_ = ArmCpsr{};
     
     // Note: dmem_ is preserved (set externally)
     // Note: enable_tracing_ is preserved
+    // Note: isa_ is preserved (switch via set_isa)
 }
 
 
@@ -231,13 +238,21 @@ void CPU::check_timer_interrupt() {
 }
 
 bool CPU::detect_load_use_hazard(unsigned int rs1, unsigned int rs2) const {
-    if (id_ex.valid && id_ex.memRe && id_ex.regWrite && id_ex.rd != 0) {
-        if ((rs1 != 0 && id_ex.rd == rs1) || (rs2 != 0 && id_ex.rd == rs2)) {
+    const int z = isa_ ? isa_->zero_reg_index() : 0;
+    auto is_zero = [z](unsigned r) {
+        return z >= 0 && static_cast<unsigned>(z) == r;
+    };
+    auto rd_ok = [z](unsigned rd) {
+        return (z < 0) ? true : (rd != static_cast<unsigned>(z));
+    };
+
+    if (id_ex.valid && id_ex.memRe && id_ex.regWrite && rd_ok(id_ex.rd)) {
+        if ((!is_zero(rs1) && id_ex.rd == rs1) || (!is_zero(rs2) && id_ex.rd == rs2)) {
             return true;
         }
     }
-    if (ex_mem_prev.valid && ex_mem_prev.memRe && ex_mem_prev.regWrite && ex_mem_prev.rd != 0) {
-        if ((rs1 != 0 && ex_mem_prev.rd == rs1) || (rs2 != 0 && ex_mem_prev.rd == rs2)) {
+    if (ex_mem_prev.valid && ex_mem_prev.memRe && ex_mem_prev.regWrite && rd_ok(ex_mem_prev.rd)) {
+        if ((!is_zero(rs1) && ex_mem_prev.rd == rs1) || (!is_zero(rs2) && ex_mem_prev.rd == rs2)) {
             return true;
         }
     }
@@ -245,7 +260,11 @@ bool CPU::detect_load_use_hazard(unsigned int rs1, unsigned int rs2) const {
 }
 
 int32_t CPU::forward_ex_operand(unsigned int reg, int32_t id_ex_fallback) const {
-    if (reg == 0) {
+    const unsigned gprs = static_cast<unsigned>(gpr_count());
+    if (reg >= gprs) {
+        return id_ex_fallback;
+    }
+    if (get_isa() == IsaKind::Riscv32 && reg == 0) {
         return 0;
     }
     if (ex_mem_prev.regWrite && ex_mem_prev.rd == reg) {
@@ -261,10 +280,67 @@ int32_t CPU::forward_ex_operand(unsigned int reg, int32_t id_ex_fallback) const 
 }
 
 int32_t CPU::forwarded_int_register(unsigned int r) const {
+    if (get_isa() == IsaKind::Aarch32 && r == 15) {
+        const uint32_t pc = id_ex.valid ? id_ex.pc : PC;
+        return static_cast<int32_t>(pc + 8);
+    }
+    if (r >= 32) {
+        return 0;
+    }
     return forward_ex_operand(r, registers[r]);
 }
 
-bool CPU::handle_ecall_syscalls(int32_t a7, int32_t a0_in, int32_t a1, int32_t a2, bool debug) {
+int32_t CPU::read_gpr_arch(unsigned r) const {
+    if (get_isa() == IsaKind::Aarch32 && r == 15) {
+        const uint32_t pc = id_ex.valid ? id_ex.pc : PC;
+        return static_cast<int32_t>(pc + 8);
+    }
+    if (get_isa() == IsaKind::Riscv32 && r == 0) {
+        return 0;
+    }
+    if (r >= 32) {
+        return 0;
+    }
+    return registers[r];
+}
+
+void CPU::write_gpr_arch(unsigned r, int32_t v) {
+    if (get_isa() == IsaKind::Aarch32 && r == 15) {
+        PC = static_cast<uint32_t>(v) & ~1u;
+        pipeline_flush = true;
+        return;
+    }
+    if (get_isa() == IsaKind::Riscv32 && r == 0) {
+        return;
+    }
+    if (r >= 32) {
+        return;
+    }
+    registers[r] = v;
+}
+
+void CPU::set_isa(IsaKind kind) {
+    isa_ = create_isa_backend(kind);
+    cpsr_ = ArmCpsr{};
+}
+
+IsaKind CPU::get_isa() const {
+    return isa_ ? isa_->kind() : IsaKind::Riscv32;
+}
+
+const IsaBackend& CPU::isa() const {
+    return *isa_;
+}
+
+IsaBackend& CPU::isa() {
+    return *isa_;
+}
+
+int CPU::gpr_count() const {
+    return isa_ ? isa_->gpr_count() : 32;
+}
+
+bool CPU::handle_ecall_syscalls(int32_t a7, int32_t a0_in, int32_t a1, int32_t a2, bool debug, int result_rd) {
     ex_mem.memRe = false;
     ex_mem.memWr = false;
     ex_mem.memToReg = false;
@@ -297,7 +373,7 @@ bool CPU::handle_ecall_syscalls(int32_t a7, int32_t a0_in, int32_t a1, int32_t a
             std::cout.flush();
         }
         ex_mem.regWrite = true;
-        ex_mem.rd = 10;
+        ex_mem.rd = static_cast<unsigned int>(result_rd);
         ex_mem.alu_result = ret;
         ex_mem.valid = true;
         return true;
@@ -315,7 +391,7 @@ bool CPU::handle_ecall_syscalls(int32_t a7, int32_t a0_in, int32_t a1, int32_t a
             }
         }
         ex_mem.regWrite = true;
-        ex_mem.rd = 10;
+        ex_mem.rd = static_cast<unsigned int>(result_rd);
         ex_mem.alu_result = ret;
         ex_mem.valid = true;
         return true;
@@ -335,13 +411,13 @@ bool CPU::handle_ecall_syscalls(int32_t a7, int32_t a0_in, int32_t a1, int32_t a
             }
         }
         ex_mem.regWrite = true;
-        ex_mem.rd = 10;
+        ex_mem.rd = static_cast<unsigned int>(result_rd);
         ex_mem.valid = true;
         return true;
     }
 
     ex_mem.regWrite = true;
-    ex_mem.rd = 10;
+    ex_mem.rd = static_cast<unsigned int>(result_rd);
     ex_mem.alu_result = -1;
     ex_mem.valid = true;
     if (debug || enable_logging) {
@@ -400,13 +476,25 @@ bool CPU::fetch_word_le(uint32_t addr, uint32_t* out) {
 
 // returns the value of a specific register
 int CPU::get_register_value(int reg) {
-	if (reg < 0 || reg > 32)
+	if (reg < 0 || reg >= gpr_count())
+		return 0;
+	if (get_isa() == IsaKind::Aarch32 && reg == 15) {
+		return static_cast<int>(PC + 8);
+	}
+	if (get_isa() == IsaKind::Riscv32 && reg == 0)
 		return 0;
 	return static_cast<int>(registers[reg]);
 }
 
 void CPU::set_register_value(int reg, int32_t value) {
-    if (reg < 0 || reg >= 32) {
+    if (reg < 0 || reg >= gpr_count()) {
+        return;
+    }
+    if (get_isa() == IsaKind::Aarch32 && reg == 15) {
+        PC = static_cast<uint32_t>(value) & ~1u;
+        return;
+    }
+    if (get_isa() == IsaKind::Riscv32 && reg == 0) {
         return;
     }
     registers[reg] = value;
@@ -1120,8 +1208,10 @@ void CPU::write_memory(uint32_t address, int32_t value, int type) {
 void CPU::print_all_registers() {
     std::cout << std::dec; // force decimal
     std::cout << "Register Values:" << std::endl;
-    for (int i = 0; i < 32; i++) {
-        std::cout << REGISTER_NAMES[i] << ": " << registers[i] << std::endl;
+    const int n = gpr_count();
+    for (int i = 0; i < n; i++) {
+        const char* name = isa_ ? isa_->abi_name(i) : REGISTER_NAMES[i].c_str();
+        std::cout << name << ": " << registers[i] << std::endl;
     }
 }
 
@@ -1141,6 +1231,36 @@ void CPU::instruction_fetch(bool debug) {
     if (use_hex_bounds_ && PC >= static_cast<uint32_t>(maxPC)) {
         if_id.valid = false;
         if (debug) { std::cout << "IF: End of program reached at PC " << PC << std::endl; }
+        return;
+    }
+
+    // AArch32: always fetch a 32-bit word (no Thumb/RVC compressed path)
+    if (get_isa() == IsaKind::Aarch32) {
+        uint32_t fetch_pc = PC;
+        uint32_t w = 0;
+        if (!fetch_word_le(PC, &w)) {
+            if (faulted_) {
+                return;
+            }
+            if_id.valid = false;
+            if (debug) { std::cout << "IF: fetch failed (no instruction)" << std::endl; }
+            return;
+        }
+        if (w == 0) {
+            if_id.valid = false;
+            if (debug) { std::cout << "IF: NOP instruction (all zeros)" << std::endl; }
+            return;
+        }
+        if_id.instruction = w;
+        if_id.is_compressed = false;
+        if_id.compressed_inst = 0;
+        if_id.pc = fetch_pc;
+        if_id.valid = true;
+        if (debug) {
+            std::cout << "IF: Fetched ARM instruction 0x" << std::hex << if_id.instruction
+                      << " at PC 0x" << if_id.pc << std::dec << std::endl;
+        }
+        incPC(4);
         return;
     }
 
@@ -1203,6 +1323,164 @@ void CPU::instruction_fetch(bool debug) {
 
 
 void CPU::instruction_decode(bool debug) {
+    if (get_isa() == IsaKind::Aarch32) {
+        instruction_decode_arm(debug);
+        return;
+    }
+    instruction_decode_riscv(debug);
+}
+
+void CPU::instruction_decode_arm(bool debug) {
+    if (pipeline_flush) {
+        id_ex.valid = false;
+        pipeline_flush = false;
+        if (debug) {
+            std::cout << "ID: Flushed due to branch" << std::endl;
+        }
+        return;
+    }
+
+    if (!if_id.valid) {
+        id_ex.valid = false;
+        if (debug) {
+            std::cout << "ID: No valid instruction to decode" << std::endl;
+        }
+        return;
+    }
+
+    // Capture prior ID/EX for load-use (apply_decode overwrites id_ex)
+    const ID_EX_Register prev_id_ex = id_ex;
+
+    id_ex.pc = if_id.pc;
+    id_ex.is_compressed = false;
+    id_ex.compressed_inst = 0;
+
+    bool ok = false;
+    aarch32_apply_decode(if_id.instruction, id_ex, ok);
+
+    if (!ok) {
+        if (execution_mode_ == ExecutionMode::Executable && if_id.instruction != 0) {
+            raise_fault(FaultCause::IllegalInstruction, if_id.pc);
+        }
+        id_ex.valid = false;
+        if (debug) {
+            std::cout << "ID: Invalid ARM instruction decoded" << std::endl;
+        }
+        return;
+    }
+
+    const unsigned rs1 = id_ex.rs1;
+    const unsigned rs2 = id_ex.rs2;
+    bool load_use = false;
+    if (prev_id_ex.valid && prev_id_ex.memRe && prev_id_ex.regWrite) {
+        if (rs1 == prev_id_ex.rd || rs2 == prev_id_ex.rd) {
+            load_use = true;
+        }
+    }
+    if (!load_use && ex_mem_prev.valid && ex_mem_prev.memRe && ex_mem_prev.regWrite) {
+        if (rs1 == ex_mem_prev.rd || rs2 == ex_mem_prev.rd) {
+            load_use = true;
+        }
+    }
+
+    if (load_use) {
+        pipeline_stall = true;
+        id_ex.valid = false;
+        if (debug) {
+            std::cout << "ID: Load-use hazard — stalling (rs1=" << rs1 << " rs2=" << rs2 << ")" << std::endl;
+        }
+        return;
+    }
+    pipeline_stall = false;
+
+    stats_.total_instructions++;
+    switch (static_cast<ArmOpKind>(id_ex.opcode)) {
+        case ArmOpKind::LoadStore:
+            if (id_ex.memRe) stats_.load_count++;
+            else if (id_ex.memWr) stats_.store_count++;
+            break;
+        case ArmOpKind::BlockTransfer:
+            if (id_ex.memRe) stats_.load_count++;
+            else stats_.store_count++;
+            break;
+        case ArmOpKind::Branch:
+        case ArmOpKind::BranchLink:
+            stats_.branch_count++;
+            break;
+        case ArmOpKind::Bx:
+            stats_.jump_count++;
+            break;
+        case ArmOpKind::DataProc:
+        case ArmOpKind::Multiply:
+            stats_.r_type_count++;
+            break;
+        default:
+            break;
+    }
+
+    // Read GPRs; r15 reads as PC+8 of this instruction
+    auto read_arm_reg = [&](unsigned r) -> int32_t {
+        if (r == 15) {
+            return static_cast<int32_t>(if_id.pc + 8);
+        }
+        return get_register_value(static_cast<int>(r));
+    };
+    id_ex.rs1_data = read_arm_reg(id_ex.rs1);
+    id_ex.rs2_data = read_arm_reg(id_ex.rs2);
+    if (id_ex.rs3 != 0 || static_cast<ArmOpKind>(id_ex.opcode) == ArmOpKind::Multiply) {
+        // rs3 may be shift-by-reg Rs or MLA accumulate Rn (including r0)
+        id_ex.rs3_fp_data = 0.0f; // unused
+    }
+
+    // Branch prediction for B/BL (not BX)
+    const ArmOpKind kind = static_cast<ArmOpKind>(id_ex.opcode);
+    if (id_ex.branch && !id_ex.arm_bx &&
+        (kind == ArmOpKind::Branch || kind == ArmOpKind::BranchLink)) {
+        const uint32_t target = if_id.pc + 8 + static_cast<uint32_t>(id_ex.immediate);
+        if (branch_predictor_) {
+            BranchPrediction pred = branch_predictor_->predict(if_id.pc, target);
+            branch_predicted_taken_ = pred.predicted_taken;
+            branch_predicted_target_ = pred.predicted_target;
+            branch_pc_ = if_id.pc;
+            if (pred.predicted_taken) {
+                PC = target;
+                pipeline_flush = true;
+                if (debug) {
+                    std::cout << "ID: ARM branch predicted taken, PC -> 0x"
+                              << std::hex << target << std::dec << std::endl;
+                }
+            }
+        } else {
+            branch_predicted_taken_ = false;
+            branch_predicted_target_ = target;
+            branch_pc_ = if_id.pc;
+        }
+    } else {
+        branch_predicted_taken_ = false;
+        branch_predicted_target_ = 0;
+        branch_pc_ = 0;
+    }
+
+    id_ex.pc = if_id.pc;
+    id_ex.instruction = if_id.instruction;
+    id_ex.is_compressed = false;
+    id_ex.compressed_inst = 0;
+    id_ex.valid = true;
+
+    string disasm = aarch32_disassemble(if_id.instruction);
+    if (enable_tracing_) {
+        track_instruction_dependencies(stats_.total_cycles, if_id.pc, id_ex.rd,
+                                       id_ex.rs1, id_ex.rs2, disasm);
+    }
+
+    if (debug) {
+        std::cout << "ID: Decoded ARM instruction - " << disasm << std::endl;
+        std::cout << "    rs1_data: " << id_ex.rs1_data << ", rs2_data: " << id_ex.rs2_data
+                  << ", immediate: " << id_ex.immediate << std::endl;
+    }
+}
+
+void CPU::instruction_decode_riscv(bool debug) {
     if (pipeline_flush) {
         id_ex.valid = false;
         pipeline_flush = false;
@@ -1359,6 +1637,11 @@ void CPU::instruction_decode(bool debug) {
 }
 
 void CPU::execute_stage(bool debug) {
+    if (get_isa() == IsaKind::Aarch32) {
+        execute_stage_arm(debug);
+        return;
+    }
+
     if (!id_ex.valid) {
         ex_mem.valid = false;
         if (debug) {
@@ -1411,7 +1694,7 @@ void CPU::execute_stage(bool debug) {
             return;
         }
 
-        handle_ecall_syscalls(a7, a0_in, a1, a2, debug);
+        handle_ecall_syscalls(a7, a0_in, a1, a2, debug, isa_->syscall_ret_reg());
         return;
     }
 
@@ -1732,6 +2015,370 @@ void CPU::execute_stage(bool debug) {
     }
 }
 
+void CPU::execute_stage_arm(bool debug) {
+    auto fill_ex_common = [&]() {
+        ex_mem.pc = id_ex.pc;
+        ex_mem.instruction = id_ex.instruction;
+        ex_mem.is_compressed = false;
+        ex_mem.compressed_inst = 0;
+        ex_mem.fpRegWrite = false;
+        ex_mem.fp_result = 0.0f;
+        ex_mem.rs2_fp_data = 0.0f;
+        ex_mem.memReadType = id_ex.memReadType;
+        ex_mem.memWriteType = id_ex.memWriteType;
+    };
+
+    auto emit_nop = [&]() {
+        fill_ex_common();
+        ex_mem.regWrite = false;
+        ex_mem.memRe = false;
+        ex_mem.memWr = false;
+        ex_mem.memToReg = false;
+        ex_mem.alu_result = 0;
+        ex_mem.rs2_data = 0;
+        ex_mem.rd = 0;
+        ex_mem.valid = true;
+    };
+
+    if (!id_ex.valid) {
+        ex_mem.valid = false;
+        if (debug) {
+            std::cout << "EX: No valid ARM instruction to execute" << std::endl;
+        }
+        return;
+    }
+
+    const bool cond_ok = arm_condition_passed(id_ex.arm_cond, cpsr_);
+    const ArmOpKind kind = static_cast<ArmOpKind>(id_ex.opcode);
+
+    if (!cond_ok) {
+        // Condition failed: NOP, but correct mispredicted taken branches
+        if (id_ex.branch && !id_ex.arm_bx &&
+            (kind == ArmOpKind::Branch || kind == ArmOpKind::BranchLink)) {
+            if (branch_predictor_) {
+                branch_predictor_->update(id_ex.pc, id_ex.pc + 8 + static_cast<uint32_t>(id_ex.immediate), false);
+            }
+            stats_.branch_not_taken_count++;
+            if (branch_predicted_taken_) {
+                stats_.branch_mispredictions++;
+                PC = id_ex.pc + 4;
+                pipeline_flush = true;
+            }
+        }
+        emit_nop();
+        if (debug) {
+            std::cout << "EX: ARM condition failed — NOP" << std::endl;
+        }
+        return;
+    }
+
+    if (id_ex.ecall) {
+        const int32_t a7 = forwarded_int_register(static_cast<unsigned>(isa_->syscall_nr_reg()));
+        const int32_t a0_in = forwarded_int_register(static_cast<unsigned>(isa_->syscall_arg0_reg()));
+        const int32_t a1 = forwarded_int_register(static_cast<unsigned>(isa_->syscall_arg1_reg()));
+        const int32_t a2 = forwarded_int_register(static_cast<unsigned>(isa_->syscall_arg2_reg()));
+        fill_ex_common();
+        handle_ecall_syscalls(a7, a0_in, a1, a2, debug, isa_->syscall_ret_reg());
+        return;
+    }
+
+    fill_ex_common();
+
+    switch (kind) {
+    case ArmOpKind::DataProc: {
+        // MOVW / MOVT (aluOp markers 0x100 / 0x101)
+        if (id_ex.aluOp == 0x100 || id_ex.aluOp == 0x101) {
+            uint32_t result;
+            if (id_ex.aluOp == 0x100) {
+                result = static_cast<uint32_t>(id_ex.immediate) & 0xFFFFu;
+            } else {
+                const uint32_t rd_val = static_cast<uint32_t>(
+                    forward_ex_operand(id_ex.rd, read_gpr_arch(id_ex.rd)));
+                result = (rd_val & 0xFFFFu) | (static_cast<uint32_t>(id_ex.immediate) & 0xFFFF0000u);
+            }
+            ex_mem.regWrite = true;
+            ex_mem.memRe = false;
+            ex_mem.memWr = false;
+            ex_mem.memToReg = false;
+            ex_mem.alu_result = static_cast<int32_t>(result);
+            ex_mem.rs2_data = 0;
+            ex_mem.rd = id_ex.rd;
+            ex_mem.valid = true;
+            break;
+        }
+
+        const uint8_t opc = id_ex.arm_dp_opc;
+        uint32_t rn = 0;
+        if (opc != 13 && opc != 15) { // MOV/MVN ignore Rn
+            rn = static_cast<uint32_t>(forward_ex_operand(id_ex.rs1, id_ex.rs1_data));
+        }
+
+        bool shifter_carry = cpsr_.c;
+        uint32_t op2 = 0;
+        if (id_ex.arm_op2_imm) {
+            op2 = static_cast<uint32_t>(id_ex.immediate);
+            // Immediate rotates already applied in decode; carry for logicals = bit31 of op2 after rotate
+            // Educational: keep CPSR.C unless we can recover rotate; treat as no shifter change
+            shifter_carry = cpsr_.c;
+        } else {
+            uint32_t rm = static_cast<uint32_t>(forward_ex_operand(id_ex.rs2, id_ex.rs2_data));
+            uint32_t amt = id_ex.arm_shift_imm;
+            const bool shift_by_reg = !id_ex.arm_op2_imm && ((id_ex.instruction & (1u << 4)) != 0);
+            if (shift_by_reg) {
+                const uint32_t rs_val = static_cast<uint32_t>(
+                    forward_ex_operand(id_ex.rs3, read_gpr_arch(id_ex.rs3)));
+                amt = rs_val & 0xFFu;
+            } else {
+                // Imm shift encoding: LSR/ASR #0 means 32
+                if ((id_ex.arm_shift_type == 1 || id_ex.arm_shift_type == 2) && amt == 0) {
+                    amt = 32;
+                }
+            }
+            op2 = aarch32_shift_operand(rm, id_ex.arm_shift_type, amt, shifter_carry, cpsr_.c);
+        }
+
+        bool write_rd = true;
+        ArmCpsr cpsr_copy = cpsr_;
+        bool carry_in = cpsr_.c;
+        // Logical ops / MOV/MVN/BIC: pass shifter carry for flag C
+        // ADC/SBC/RSC: pass CPSR.C as arithmetic carry_in
+        if (opc == 5 || opc == 6 || opc == 7) {
+            carry_in = cpsr_.c;
+        } else if (opc == 0 || opc == 1 || opc == 8 || opc == 9 || opc == 12 || opc == 13 ||
+                   opc == 14 || opc == 15) {
+            carry_in = shifter_carry;
+        }
+
+        int32_t result = aarch32_data_proc(opc, rn, op2, write_rd, cpsr_copy, id_ex.arm_set_flags, carry_in);
+        if (id_ex.arm_set_flags) {
+            cpsr_ = cpsr_copy;
+        }
+
+        if (write_rd && id_ex.regWrite) {
+            if (id_ex.rd == 15) {
+                PC = static_cast<uint32_t>(result) & ~1u;
+                pipeline_flush = true;
+                emit_nop();
+                if (debug) {
+                    std::cout << "EX: ARM DataProc write to PC=0x" << std::hex << PC << std::dec << std::endl;
+                }
+                return;
+            }
+            ex_mem.regWrite = true;
+            ex_mem.memRe = false;
+            ex_mem.memWr = false;
+            ex_mem.memToReg = false;
+            ex_mem.alu_result = result;
+            ex_mem.rs2_data = 0;
+            ex_mem.rd = id_ex.rd;
+            ex_mem.valid = true;
+        } else {
+            emit_nop();
+        }
+        break;
+    }
+
+    case ArmOpKind::Multiply: {
+        const int32_t rm = forward_ex_operand(id_ex.rs1, id_ex.rs1_data);
+        const int32_t rs = forward_ex_operand(id_ex.rs2, id_ex.rs2_data);
+        int32_t result = rm * rs;
+        if (id_ex.funct7 & 1u) { // accumulate
+            const int32_t rn = forward_ex_operand(id_ex.rs3, read_gpr_arch(id_ex.rs3));
+            result += rn;
+        }
+        if (id_ex.arm_set_flags) {
+            cpsr_.n = (static_cast<uint32_t>(result) >> 31) & 1;
+            cpsr_.z = (result == 0);
+            // C/V unchanged
+        }
+        if (id_ex.rd == 15) {
+            PC = static_cast<uint32_t>(result) & ~1u;
+            pipeline_flush = true;
+            emit_nop();
+            return;
+        }
+        ex_mem.regWrite = true;
+        ex_mem.memRe = false;
+        ex_mem.memWr = false;
+        ex_mem.memToReg = false;
+        ex_mem.alu_result = result;
+        ex_mem.rs2_data = 0;
+        ex_mem.rd = id_ex.rd;
+        ex_mem.valid = true;
+        break;
+    }
+
+    case ArmOpKind::LoadStore: {
+        const uint32_t base = static_cast<uint32_t>(forward_ex_operand(id_ex.rs1, id_ex.rs1_data));
+        const bool add = (id_ex.funct7 & 1u) != 0;
+        const bool preindex = (id_ex.funct7 & 2u) != 0;
+        const bool writeback = (id_ex.funct7 & 4u) != 0 || id_ex.upperIm;
+        const bool reg_off = (id_ex.funct7 & 32u) != 0;
+
+        int32_t offset = id_ex.immediate;
+        if (reg_off) {
+            bool sc = cpsr_.c;
+            uint32_t rm = static_cast<uint32_t>(forward_ex_operand(id_ex.rs2, id_ex.rs2_data));
+            uint32_t amt = id_ex.arm_shift_imm;
+            if ((id_ex.arm_shift_type == 1 || id_ex.arm_shift_type == 2) && amt == 0) {
+                amt = 32;
+            }
+            uint32_t shifted = aarch32_shift_operand(rm, id_ex.arm_shift_type, amt, sc, cpsr_.c);
+            offset = add ? static_cast<int32_t>(shifted) : -static_cast<int32_t>(shifted);
+        }
+
+        const uint32_t ea = preindex
+            ? static_cast<uint32_t>(static_cast<int32_t>(base) + offset)
+            : base;
+        const uint32_t wb_addr = static_cast<uint32_t>(static_cast<int32_t>(base) + offset);
+
+        // Store data: imm-offset uses rs2(=rd); reg-offset uses rd index
+        int32_t store_data = 0;
+        if (id_ex.memWr) {
+            if (reg_off) {
+                store_data = forward_ex_operand(id_ex.rd, read_gpr_arch(id_ex.rd));
+            } else {
+                store_data = forward_ex_operand(id_ex.rs2, id_ex.rs2_data);
+            }
+        }
+
+        if (writeback) {
+            write_gpr_arch(id_ex.rs1, static_cast<int32_t>(wb_addr));
+        }
+
+        if (id_ex.memRe && id_ex.rd == 15) {
+            // LDR to PC will complete in MEM/WB; still set up mem path
+        }
+
+        ex_mem.regWrite = id_ex.regWrite;
+        ex_mem.memRe = id_ex.memRe;
+        ex_mem.memWr = id_ex.memWr;
+        ex_mem.memToReg = id_ex.memToReg;
+        ex_mem.alu_result = static_cast<int32_t>(ea);
+        ex_mem.rs2_data = store_data;
+        ex_mem.rd = id_ex.rd;
+        ex_mem.valid = true;
+        break;
+    }
+
+    case ArmOpKind::BlockTransfer: {
+        const bool add = (id_ex.funct7 & 1u) != 0;
+        const bool preindex = (id_ex.funct7 & 2u) != 0;
+        const bool writeback = (id_ex.funct7 & 4u) != 0;
+        const bool load = (id_ex.funct7 & 8u) != 0;
+        const uint16_t reglist = static_cast<uint16_t>(id_ex.immediate);
+        const uint32_t base = static_cast<uint32_t>(forward_ex_operand(id_ex.rs1, id_ex.rs1_data));
+
+        int n = 0;
+        for (int i = 0; i < 16; ++i) {
+            if (reglist & (1u << i)) ++n;
+        }
+
+        uint32_t addr = base;
+        if (add && preindex) {
+            addr = base + 4;
+        } else if (!add && preindex) {
+            addr = base - static_cast<uint32_t>(4 * n);
+        } else if (!add && !preindex) {
+            addr = base - static_cast<uint32_t>(4 * n) + 4;
+        }
+        // else IA: addr = base
+
+        bool pc_written = false;
+        for (int i = 0; i < 16; ++i) {
+            if (!(reglist & (1u << i))) continue;
+            if (load) {
+                int32_t v = read_memory(addr, 5);
+                if (i == 15) {
+                    PC = static_cast<uint32_t>(v) & ~1u;
+                    pipeline_flush = true;
+                    pc_written = true;
+                } else {
+                    registers[i] = v;
+                }
+            } else {
+                int32_t v;
+                if (i == 15) {
+                    v = static_cast<int32_t>(id_ex.pc + 8);
+                } else {
+                    v = registers[i];
+                }
+                write_memory(addr, v, 3);
+            }
+            addr += 4;
+        }
+
+        if (writeback && !pc_written) {
+            const uint32_t new_base = add
+                ? (base + static_cast<uint32_t>(4 * n))
+                : (base - static_cast<uint32_t>(4 * n));
+            write_gpr_arch(id_ex.rs1, static_cast<int32_t>(new_base));
+        }
+
+        // Completed in EX — emit NOP for MEM/WB
+        emit_nop();
+        stats_.instructions_retired++;
+        break;
+    }
+
+    case ArmOpKind::Branch:
+    case ArmOpKind::BranchLink: {
+        const uint32_t target = id_ex.pc + 8 + static_cast<uint32_t>(id_ex.immediate);
+        const bool should_branch = true; // condition already checked
+
+        if (branch_predictor_) {
+            branch_predictor_->update(id_ex.pc, target, should_branch);
+        }
+        stats_.branch_taken_count++;
+
+        if (!branch_predicted_taken_ || target != branch_predicted_target_) {
+            stats_.branch_mispredictions++;
+            PC = target;
+            pipeline_flush = true;
+        }
+        // Correctly predicted taken: flush already done in ID
+
+        if (id_ex.arm_link || kind == ArmOpKind::BranchLink) {
+            ex_mem.regWrite = true;
+            ex_mem.memRe = false;
+            ex_mem.memWr = false;
+            ex_mem.memToReg = false;
+            ex_mem.alu_result = static_cast<int32_t>(id_ex.pc + 4);
+            ex_mem.rs2_data = 0;
+            ex_mem.rd = 14; // LR
+            ex_mem.valid = true;
+        } else {
+            emit_nop();
+        }
+        break;
+    }
+
+    case ArmOpKind::Bx: {
+        const uint32_t target = static_cast<uint32_t>(
+            forward_ex_operand(id_ex.rs1, id_ex.rs1_data)) & ~1u;
+        PC = target;
+        pipeline_flush = true;
+        emit_nop();
+        if (debug) {
+            std::cout << "EX: BX to 0x" << std::hex << target << std::dec << std::endl;
+        }
+        break;
+    }
+
+    default:
+        if (execution_mode_ == ExecutionMode::Executable) {
+            raise_fault(FaultCause::IllegalInstruction, id_ex.pc);
+        }
+        emit_nop();
+        break;
+    }
+
+    if (debug) {
+        std::cout << "EX: ARM op kind=" << static_cast<int>(kind)
+                  << " alu_result=" << ex_mem.alu_result << std::endl;
+    }
+}
+
 
 void CPU::memory_stage(bool debug) {
     if (!ex_mem.valid) {
@@ -1842,24 +2489,40 @@ void CPU::write_back_stage(bool debug) {
         }
         return;
     }
-    
-    if (mem_wb.regWrite && mem_wb.rd != 0) {
+
+    const int z = isa_ ? isa_->zero_reg_index() : 0;
+    const bool may_write_gpr = mem_wb.regWrite &&
+        ((z < 0) || (mem_wb.rd != static_cast<unsigned>(z)));
+
+    if (may_write_gpr) {
         int32_t write_data = mem_wb.memToReg ? mem_wb.mem_data : mem_wb.alu_result;
-        int32_t old_value = previous_register_values_[mem_wb.rd];
-        registers[mem_wb.rd] = write_data;
-        stats_.instructions_retired++;
-        
-        // Track register change
-        if (enable_tracing_) {
-            track_register_change(stats_.total_cycles, mem_wb.rd, old_value, write_data, mem_wb.pc);
-            previous_register_values_[mem_wb.rd] = write_data;
-            
-            record_reg_write_wb(mem_wb, stats_.total_cycles);
-        }
-        
-        if (debug) {
-            std::cout << std::dec;
-            std::cout << "WB: Write " << write_data << " to register " << REGISTER_NAMES[mem_wb.rd] << std::endl;
+
+        if (get_isa() == IsaKind::Aarch32 && mem_wb.rd == 15) {
+            PC = static_cast<uint32_t>(write_data) & ~1u;
+            pipeline_flush = true;
+            stats_.instructions_retired++;
+            if (debug) {
+                std::cout << "WB: Write PC=0x" << std::hex << PC << std::dec << std::endl;
+            }
+        } else {
+            int32_t old_value = previous_register_values_[mem_wb.rd];
+            registers[mem_wb.rd] = write_data;
+            stats_.instructions_retired++;
+
+            // Track register change
+            if (enable_tracing_) {
+                track_register_change(stats_.total_cycles, mem_wb.rd, old_value, write_data, mem_wb.pc);
+                previous_register_values_[mem_wb.rd] = write_data;
+
+                record_reg_write_wb(mem_wb, stats_.total_cycles);
+            }
+
+            if (debug) {
+                std::cout << std::dec;
+                const char* name = isa_ ? isa_->abi_name(static_cast<int>(mem_wb.rd))
+                                        : REGISTER_NAMES[mem_wb.rd].c_str();
+                std::cout << "WB: Write " << write_data << " to register " << name << std::endl;
+            }
         }
     }
     
@@ -2391,6 +3054,10 @@ int32_t CPU::execute_fp_classify(float operand) const {
 }
 
 string CPU::disassemble_instruction(uint32_t instruction) const {
+    if (get_isa() == IsaKind::Aarch32) {
+        return aarch32_disassemble(instruction);
+    }
+
     unsigned int opcode = instruction & 0x7F;
     unsigned int rd = (instruction >> 7) & 0x1F;
     unsigned int funct3 = (instruction >> 12) & 0x7;

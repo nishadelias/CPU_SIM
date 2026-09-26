@@ -13,6 +13,7 @@
 #include "MemoryMap.h"
 #include "ExecutionMode.h"
 #include "SimLimits.h"
+#include "isa/IsaFactory.h"
 #include <QSettings>
 
 static bool peek_is_elf(const QString& path) {
@@ -25,16 +26,30 @@ static bool peek_is_elf(const QString& path) {
            h[3] == 'F';
 }
 
+/** Hex teaching files named *arm* / *aarch* use AArch32 encodings; others default to RV32. */
+static IsaKind hex_isa_from_path(const QString& path) {
+    const QString base = QFileInfo(path).fileName().toLower();
+    if (base.contains(QStringLiteral("arm")) || base.contains(QStringLiteral("aarch"))) {
+        return IsaKind::Aarch32;
+    }
+    return IsaKind::Riscv32;
+}
+
 QString SimulatorController::loadedProgramDescription() const {
     if (lastProgramPath_.isEmpty()) {
         return {};
     }
     if (lastLoadElf_) {
-        return QStringLiteral("ELF (compiled C/RISC-V) — entry 0x%1, sp set, brk=0x%2")
+        const char* isa = (elf_machine_ == EM_ARM) ? "AArch32/ARM" : "RISC-V";
+        return QStringLiteral("ELF (%1) — entry 0x%2, sp set, brk=0x%3")
+            .arg(QString::fromUtf8(isa))
             .arg(elf_entry_, 8, 16, QLatin1Char('0'))
             .arg(elf_heap_brk_, 8, 16, QLatin1Char('0'));
     }
-    return QStringLiteral("Hex text (instruction memory) — %1 bytes loaded at 0x%2")
+    const char* hexIsa =
+        (hexIsa_ == IsaKind::Aarch32) ? "AArch32 encodings" : "RISC-V encodings";
+    return QStringLiteral("Hex text (%1) — %2 bytes loaded at 0x%3")
+        .arg(QString::fromUtf8(hexIsa))
         .arg(maxPC_)
         .arg(MemoryMap::HEX_PROGRAM_BASE, 8, 16, QLatin1Char('0'));
 }
@@ -53,6 +68,8 @@ SimulatorController::SimulatorController(QObject* parent)
     , lastLoadElf_(false)
     , elf_entry_(0)
     , elf_heap_brk_(0)
+    , elf_machine_(EM_RISCV)
+    , hexIsa_(IsaKind::Riscv32)
     , maxCycles_(SimLimits::DEFAULT_MAX_CYCLES)
     , cycleLimitReached_(false)
     , fastRunActive_(false)
@@ -91,6 +108,7 @@ void SimulatorController::reloadProgramIntoRam() {
         if (r.ok) {
             elf_entry_ = r.entry;
             elf_heap_brk_ = r.heap_brk;
+            elf_machine_ = r.machine;
             maxPC_ = 0;
         }
     } else {
@@ -105,12 +123,15 @@ void SimulatorController::applyCpuLoadState() {
     cpu_.set_ram_size(MemoryMap::RAM_SIZE);
     cpu_.set_execution_mode(ExecutionMode::Educational);
     if (lastLoadElf_) {
+        cpu_.set_isa(isa_kind_from_elf_machine(elf_machine_));
         cpu_.set_use_hex_bounds(false);
         cpu_.set_max_pc(0);
         cpu_.set_pc(elf_entry_);
         cpu_.set_heap_brk(elf_heap_brk_);
-        cpu_.set_register_value(2, static_cast<int32_t>(MemoryMap::STACK_TOP - 16));
+        cpu_.set_register_value(cpu_.isa().sp_index(),
+                                static_cast<int32_t>(MemoryMap::STACK_TOP - 16));
     } else {
+        cpu_.set_isa(hexIsa_);
         cpu_.set_use_hex_bounds(true);
         cpu_.set_max_pc(maxPC_);
         cpu_.set_pc(MemoryMap::HEX_PROGRAM_BASE);
@@ -146,6 +167,9 @@ bool SimulatorController::loadProgram(const QString& filename) {
             qDebug() << "ELF load failed:" << lastLoadError_;
             return false;
         }
+        elf_entry_ = er.entry;
+        elf_heap_brk_ = er.heap_brk;
+        elf_machine_ = er.machine;
     } else {
         SimpleRAM tmp(MemoryMap::RAM_SIZE);
         uint32_t nb = 0;
@@ -163,6 +187,9 @@ bool SimulatorController::loadProgram(const QString& filename) {
 
     lastProgramPath_ = filename;
     lastLoadElf_ = is_elf;
+    if (!is_elf) {
+        hexIsa_ = hex_isa_from_path(filename);
+    }
     lastLoadError_.clear();
 
     QFileInfo fileInfo(filename);

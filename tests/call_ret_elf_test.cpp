@@ -4,6 +4,7 @@
 #include "MemoryMap.h"
 #include "ElfLoader.h"
 #include "ExecutionMode.h"
+#include "isa/IsaFactory.h"
 #include "test_common.h"
 
 #include <cstdio>
@@ -24,11 +25,12 @@ int main(int argc, char** argv) {
 
     DirectMappedCache dcache(&dram, 4 * 1024, 32);
     CPU cpu;
+    cpu.set_isa(isa_kind_from_elf_machine(lr.machine));
     cpu.set_data_memory(&dcache);
     cpu.set_ram_size(MemoryMap::RAM_SIZE);
     cpu.set_pc(lr.entry);
     cpu.set_heap_brk(lr.heap_brk);
-    cpu.set_register_value(2, static_cast<int32_t>(MemoryMap::STACK_TOP - 16));
+    cpu.set_register_value(cpu.isa().sp_index(), static_cast<int32_t>(MemoryMap::STACK_TOP - 16));
 
     int c = 0;
     while (c < TestCommon::DEFAULT_TEST_MAX_CYCLES) {

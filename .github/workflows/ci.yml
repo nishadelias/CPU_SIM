@@ -17,7 +17,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build \
             qt6-base-dev qt6-charts-dev \
-            gcc-riscv64-unknown-elf
+            gcc-riscv64-unknown-elf \
+            gcc-arm-none-eabi
 
       - name: Configure (headless)
         run: cmake -S . -B build -G Ninja -DBUILD_GUI=OFF
@@ -28,8 +29,10 @@ jobs:
       - name: CTest
         run: ctest --test-dir build --output-on-failure
 
-      - name: Integration script
-        run: bash scripts/run_riscv_integration.sh
+      - name: Integration scripts
+        run: |
+          bash scripts/run_riscv_integration.sh
+          bash scripts/run_arm_integration.sh
 
   build-test-macos:
     runs-on: macos-latest
@@ -38,7 +41,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install cmake ninja qt@6 riscv64-elf-gcc
+          brew install cmake ninja qt@6 riscv64-elf-gcc arm-none-eabi-gcc
           echo "$(brew --prefix qt@6)/bin" >> $GITHUB_PATH
 
       - name: Configure (headless)
@@ -49,3 +52,6 @@ jobs:
 
       - name: CTest
         run: ctest --test-dir build --output-on-failure
+
+      - name: ARM integration script
+        run: bash scripts/run_arm_integration.sh

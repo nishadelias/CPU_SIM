@@ -74,6 +74,8 @@ private:
     bool lastLoadElf_;
     uint32_t elf_entry_;
     uint32_t elf_heap_brk_;
+    uint16_t elf_machine_;
+    IsaKind hexIsa_;
 
     int maxCycles_;
     bool cycleLimitReached_;

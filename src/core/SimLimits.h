@@ -3,7 +3,7 @@
 // Shared simulation limits for CLI, GUI, and tests.
 namespace SimLimits {
 
-constexpr int DEFAULT_MAX_CYCLES = 200000;
+constexpr int DEFAULT_MAX_CYCLES = 1000000;
 
 // Maximum continuous simulation rate in the GUI (cycles per second).
 constexpr int MAX_SIM_SPEED_CPS = 500;

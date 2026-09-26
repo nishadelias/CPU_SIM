@@ -1,5 +1,6 @@
 #include "ElfLoader.h"
 #include "MemoryMap.h"
+#include "IsaKind.h"
 
 #include <cstring>
 #include <fstream>
@@ -9,7 +10,6 @@
 namespace {
 
 constexpr uint32_t PT_LOAD = 1;
-constexpr uint16_t EM_RISCV = 0xF3;
 
 struct Elf32_Ehdr {
     uint8_t e_ident[16];
@@ -64,8 +64,8 @@ ElfLoadResult load_elf32_into_ram(const std::string& path, SimpleRAM& ram) {
         r.error = "expected ELFCLASS32";
         return r;
     }
-    if (eh.e_machine != EM_RISCV) {
-        r.error = "expected EM_RISCV";
+    if (eh.e_machine != EM_RISCV && eh.e_machine != EM_ARM) {
+        r.error = "expected EM_RISCV or EM_ARM";
         return r;
     }
     if (eh.e_phnum == 0 || eh.e_phentsize < sizeof(Elf32_Phdr)) {
@@ -120,6 +120,7 @@ ElfLoadResult load_elf32_into_ram(const std::string& path, SimpleRAM& ram) {
     }
 
     r.entry = eh.e_entry;
+    r.machine = eh.e_machine;
     r.heap_brk = (max_end + 7u) & ~7u;  // 8-byte align brk
     if (r.heap_brk > MemoryMap::RAM_SIZE) {
         r.heap_brk = MemoryMap::RAM_SIZE;

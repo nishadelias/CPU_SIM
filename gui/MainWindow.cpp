@@ -26,7 +26,7 @@ MainWindow::MainWindow(QWidget* parent)
     connectSignals();
     updateUI();
     
-    setWindowTitle("RISC-V CPU Simulator GUI");
+    setWindowTitle("CPU Simulator GUI");
     resize(1400, 900);
 }
 
@@ -267,7 +267,7 @@ void MainWindow::openProgramPath(const QString& filename) {
         lblFilename_->setText(fileName);
         lblFilename_->setStyleSheet("QLabel { color: black; font-style: normal; }");
         lblProgramType_->setText(controller_->loadedProgramDescription());
-        setWindowTitle("RISC-V CPU Simulator GUI - " + fileName);
+        setWindowTitle("CPU Simulator GUI - " + fileName);
         lblStatus_->setText("Ready");
         resetSimulation();
     } else {
@@ -278,8 +278,9 @@ void MainWindow::openProgramPath(const QString& filename) {
             this,
             "Could not load program",
             QStringLiteral("Failed to load the file.\n\n%1\n\n"
-                           "- ELF: 32-bit little-endian RISC-V (EM_RISCV), PT_LOAD in 64 KiB at 0.\n"
-                           "- Hex: whitespace-separated hex byte pairs (e.g. 93 00 00 00).")
+                           "- ELF: 32-bit LE RISC-V (EM_RISCV) or AArch32 (EM_ARM), PT_LOAD in 64 KiB at 0.\n"
+                           "- Hex: whitespace-separated hex byte pairs. Filenames containing \"arm\" "
+                           "use AArch32 encodings (e.g. instMem-forward-arm.txt); others are RISC-V.")
                 .arg(detail));
     }
 }

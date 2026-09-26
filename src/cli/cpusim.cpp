@@ -10,6 +10,8 @@
 #include "HexLoader.h"
 #include "ExecutionMode.h"
 #include "SimLimits.h"
+#include "IsaKind.h"
+#include "isa/IsaFactory.h"
 
 #include <iostream>
 #include <fstream>
@@ -74,12 +76,14 @@ static void print_usage(const char* prog) {
             "Options:\n"
             "  --debug                 Verbose pipeline trace\n"
             "  --log <file>            Pipeline log file\n"
-            "  --executable            Strict RV32 trap behavior (illegal insn / memory faults)\n"
+            "  --isa <riscv|arm>       Force ISA (default: auto from ELF e_machine;\n"
+            "                          hex: filename containing arm/aarch → AArch32, else RV32)\n"
+            "  --executable            Strict trap behavior (illegal insn / memory faults)\n"
             "  --bench                 Benchmark mode: print CSV/JSON stats and exit\n"
             "  --json                  With --bench: JSON output (default CSV)\n"
             "  --cache <scheme>        direct|fa|2way|4way|8way (default direct)\n"
             "  --predictor <p>         ant|at|bimodal|gshare|tournament (default ant)\n"
-            "  --max-cycles <n>        Cycle limit (default 200000)\n";
+            "  --max-cycles <n>        Cycle limit (default 1000000)\n";
 }
 
 static void run_print_results(CPU& cpu, int cycles, bool bench_json) {
@@ -139,6 +143,8 @@ int main(int argc, char* argv[]) {
     CacheSchemeType cache_type = CacheSchemeType::DirectMapped;
     BranchPredictorType pred_type = BranchPredictorType::AlwaysNotTaken;
     int max_cycles = SimLimits::DEFAULT_MAX_CYCLES;
+    bool isa_forced = false;
+    IsaKind isa_kind = IsaKind::Riscv32;
 
     if (argc < 2) {
         print_usage(argv[0]);
@@ -154,6 +160,17 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--log" && i + 1 < argc) {
             enable_logging = true;
             log_filename = argv[++i];
+        } else if (arg == "--isa" && i + 1 < argc) {
+            string v = argv[++i];
+            isa_forced = true;
+            if (v == "arm" || v == "aarch32" || v == "a32") {
+                isa_kind = IsaKind::Aarch32;
+            } else if (v == "riscv" || v == "rv32" || v == "rv") {
+                isa_kind = IsaKind::Riscv32;
+            } else {
+                cerr << "Unknown ISA: " << v << " (use riscv or arm)\n";
+                return 1;
+            }
         } else if (arg == "--executable") {
             executable_mode = true;
         } else if (arg == "--bench") {
@@ -195,6 +212,29 @@ int main(int argc, char* argv[]) {
     BranchPredictorScheme* bp = createBranchPredictor(pred_type);
 
     CPU myCPU;
+    if (loaded_elf && !isa_forced) {
+        isa_kind = isa_kind_from_elf_machine(elf_r.machine);
+    } else if (!loaded_elf && !isa_forced) {
+        // Match GUI: *arm* / *aarch* hex filenames select AArch32 encodings.
+        auto lower = [](string s) {
+            for (char& c : s) {
+                if (c >= 'A' && c <= 'Z') {
+                    c = static_cast<char>(c - 'A' + 'a');
+                }
+            }
+            return s;
+        };
+        string base = program_path;
+        auto slash = base.find_last_of("/\\");
+        if (slash != string::npos) {
+            base = base.substr(slash + 1);
+        }
+        base = lower(std::move(base));
+        if (base.find("arm") != string::npos || base.find("aarch") != string::npos) {
+            isa_kind = IsaKind::Aarch32;
+        }
+    }
+    myCPU.set_isa(isa_kind);
     myCPU.set_data_memory(dcache);
     myCPU.set_branch_predictor(bp);
     myCPU.set_ram_size(MemoryMap::RAM_SIZE);
@@ -205,12 +245,17 @@ int main(int argc, char* argv[]) {
         myCPU.set_max_pc(0);
         myCPU.set_pc(elf_r.entry);
         myCPU.set_heap_brk(elf_r.heap_brk);
-        myCPU.set_register_value(2, static_cast<int32_t>(MemoryMap::STACK_TOP - 16));
+        myCPU.set_register_value(myCPU.isa().sp_index(),
+                                 static_cast<int32_t>(MemoryMap::STACK_TOP - 16));
     } else {
         myCPU.set_use_hex_bounds(true);
         myCPU.set_max_pc(static_cast<int>(hex_bytes));
         myCPU.set_pc(MemoryMap::HEX_PROGRAM_BASE);
         myCPU.set_heap_brk(0);
+    }
+
+    if (debug) {
+        cout << "ISA: " << myCPU.isa().name() << "\n";
     }
 
     if (enable_logging) {
