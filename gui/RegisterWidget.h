@@ -21,8 +21,7 @@ private:
     QVBoxLayout* layout_;
     QLabel* titleLabel_;
     QTableWidget* registerTable_;
-    
-    static const QStringList REGISTER_NAMES;
+    QLabel* cpsrLabel_;
 };
 
 #endif // REGISTER_WIDGET_H

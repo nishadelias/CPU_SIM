@@ -10,12 +10,16 @@
 #include <vector>
 #include "ALU.h"
 #include <cstdint>
+#include <memory>
 #include "MemoryIf.h"
 #include "BranchPredictorScheme.h"
 #include "ExecutionMode.h"
 #include "CSRFile.h"
 #include "Trap.h"
 #include "MMU.h"
+#include "IsaKind.h"
+#include "isa/IsaBackend.h"
+#include "isa/Aarch32Backend.h"
 
 using namespace std;
 
@@ -79,6 +83,17 @@ struct ID_EX_Register {
     bool mret;             // SYSTEM: MRET
     bool valid;
 
+    // AArch32 decode sideband (ignored when arm_is_arm == false)
+    uint8_t arm_cond = 0xE;
+    bool arm_set_flags = false;
+    uint8_t arm_dp_opc = 0;
+    bool arm_link = false;
+    bool arm_bx = false;
+    bool arm_is_arm = false; // true when decoded as ARM
+    uint8_t arm_shift_type = 0;
+    uint8_t arm_shift_imm = 0;
+    bool arm_op2_imm = false;
+
     ID_EX_Register() : regWrite(false), aluSrc(false), branch(false), memRe(false),
                       memWr(false), memToReg(false), upperIm(false), aluOp(0),
                       memReadType(0), memWriteType(0),
@@ -87,7 +102,10 @@ struct ID_EX_Register {
                       opcode(0), rd(0), funct3(0), rs1(0), rs2(0), rs3(0), funct7(0),
                       rs1_data(0), rs2_data(0), immediate(0), rs1_fp_data(0.0f), rs2_fp_data(0.0f), rs3_fp_data(0.0f),
                       pc(0), instruction(0), is_compressed(false), compressed_inst(0),
-                      ebreak(false), ecall(false), mret(false), valid(false) {}
+                      ebreak(false), ecall(false), mret(false), valid(false),
+                      arm_cond(0xE), arm_set_flags(false), arm_dp_opc(0),
+                      arm_link(false), arm_bx(false), arm_is_arm(false),
+                      arm_shift_type(0), arm_shift_imm(0), arm_op2_imm(false) {}
 };
 
 struct EX_MEM_Register {
@@ -347,6 +365,8 @@ private:
                                          "fa6","fa7","fs2","fs3","fs4","fs5","fs6","fs7",
                                          "fs8","fs9","fs10","fs11","ft8","ft9","ft10","ft11"};
     ALU alu;
+    std::unique_ptr<IsaBackend> isa_;
+    ArmCpsr cpsr_;
 
     // Pipeline registers
     IF_ID_Register if_id;
@@ -380,7 +400,7 @@ private:
     bool detect_load_use_hazard(unsigned int rs1, unsigned int rs2) const;
     void deliver_trap(uint32_t cause, uint32_t tval, uint32_t fault_pc);
     void deliver_fault(FaultCause cause, uint32_t tval);
-    bool handle_ecall_syscalls(int32_t a7, int32_t a0_in, int32_t a1, int32_t a2, bool debug);
+    bool handle_ecall_syscalls(int32_t a7, int32_t a0_in, int32_t a1, int32_t a2, bool debug, int result_rd);
     void check_timer_interrupt();
     uint32_t translate_addr(uint32_t vaddr, bool fetch, bool store, bool& fault);
 
@@ -429,9 +449,15 @@ private:
     bool fetch_word_le(uint32_t addr, uint32_t* out);
     void raise_fault(FaultCause cause, uint32_t tval);
     void instruction_decode(bool debug);
+    void instruction_decode_riscv(bool debug);
+    void instruction_decode_arm(bool debug);
     void execute_stage(bool debug);
+    void execute_stage_arm(bool debug);
     void memory_stage(bool debug);
     void write_back_stage(bool debug);
+
+    int32_t read_gpr_arch(unsigned r) const;
+    void write_gpr_arch(unsigned r, int32_t v);
 
     // Helper methods
     string disassemble_instruction(uint32_t instruction) const;
@@ -525,6 +551,14 @@ public:
     
     // Get register values (for GUI)
     const int32_t* get_all_registers() const { return registers; }
+
+    void set_isa(IsaKind kind);
+    IsaKind get_isa() const;
+    const IsaBackend& isa() const;
+    IsaBackend& isa();
+    ArmCpsr get_cpsr() const { return cpsr_; }
+    void set_cpsr(ArmCpsr c) { cpsr_ = c; }
+    int gpr_count() const;
     
     // Get cache statistics (requires cache to be set)
     bool get_cache_stats(uint64_t& hits, uint64_t& misses) const;

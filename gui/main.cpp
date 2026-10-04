@@ -6,7 +6,7 @@ int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     
     // Set application properties
-    app.setApplicationName("RISC-V CPU Simulator");
+    app.setApplicationName("CPU Simulator");
     app.setApplicationVersion("1.0");
     app.setOrganizationName("CPU_SIM");
     

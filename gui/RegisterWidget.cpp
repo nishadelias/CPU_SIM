@@ -5,13 +5,6 @@
 #include <QMap>
 #include <QTableWidgetItem>
 
-const QStringList RegisterWidget::REGISTER_NAMES = {
-    "Zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2",
-    "s0/fp", "s1", "a0", "a1", "a2", "a3", "a4", "a5",
-    "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
-    "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
-};
-
 RegisterWidget::RegisterWidget(QWidget* parent)
     : QWidget(parent)
 {
@@ -34,6 +27,10 @@ void RegisterWidget::setupUI() {
     registerTable_->setColumnWidth(1, 80);
     
     layout_->addWidget(registerTable_);
+
+    cpsrLabel_ = new QLabel(this);
+    cpsrLabel_->setVisible(false);
+    layout_->addWidget(cpsrLabel_);
 }
 
 void RegisterWidget::updateDisplay(CPU* cpu) {
@@ -45,8 +42,8 @@ void RegisterWidget::updateDisplay(CPU* cpu) {
 void RegisterWidget::updateRegisterTable(CPU* cpu) {
     const int32_t* registers = cpu->get_all_registers();
     const auto& regHistory = cpu->get_register_history();
+    const int n = cpu->gpr_count();
     
-    // Create a map of recent register changes
     QMap<int, int32_t> recentChanges;
     uint64_t currentCycle = cpu->get_statistics().total_cycles;
     for (const auto& change : regHistory) {
@@ -55,25 +52,40 @@ void RegisterWidget::updateRegisterTable(CPU* cpu) {
         }
     }
     
-    registerTable_->setRowCount(32);
+    registerTable_->setRowCount(n);
     
-    for (int i = 0; i < 32; ++i) {
-        // Register number
-        registerTable_->setItem(i, 0, new QTableWidgetItem(QString("x%1").arg(i)));
+    for (int i = 0; i < n; ++i) {
+        const char* abi = cpu->isa().abi_name(i);
+        if (cpu->get_isa() == IsaKind::Aarch32) {
+            registerTable_->setItem(i, 0, new QTableWidgetItem(QString("r%1").arg(i)));
+        } else {
+            registerTable_->setItem(i, 0, new QTableWidgetItem(QString("x%1").arg(i)));
+        }
+        registerTable_->setItem(i, 1, new QTableWidgetItem(QString::fromUtf8(abi)));
         
-        // Register name
-        registerTable_->setItem(i, 1, new QTableWidgetItem(REGISTER_NAMES[i]));
-        
-        // Register value
         int32_t value = registers[i];
-        QTableWidgetItem* valueItem = new QTableWidgetItem(QString::number(value));
+        QTableWidgetItem* valueItem = new QTableWidgetItem(QString("0x%1 (%2)")
+            .arg(static_cast<uint32_t>(value), 8, 16, QLatin1Char('0'))
+            .arg(value));
         
-        // Highlight if recently changed
         if (recentChanges.contains(i) && recentChanges[i] == value) {
             valueItem->setBackground(QBrush(QColor(200, 255, 200)));
         }
         
         registerTable_->setItem(i, 2, valueItem);
     }
-}
 
+    if (cpu->get_isa() == IsaKind::Aarch32) {
+        ArmCpsr c = cpu->get_cpsr();
+        cpsrLabel_->setText(QStringLiteral("CPSR flags: N=%1 Z=%2 C=%3 V=%4")
+                                .arg(c.n ? 1 : 0)
+                                .arg(c.z ? 1 : 0)
+                                .arg(c.c ? 1 : 0)
+                                .arg(c.v ? 1 : 0));
+        cpsrLabel_->setVisible(true);
+        titleLabel_->setText(QStringLiteral("<h3>Register File (AArch32)</h3>"));
+    } else {
+        cpsrLabel_->setVisible(false);
+        titleLabel_->setText(QStringLiteral("<h3>Register File (RV32)</h3>"));
+    }
+}

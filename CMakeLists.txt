@@ -22,6 +22,9 @@ set(CPU_SOURCES
     src/core/ALU.cpp
     src/core/CSRFile.cpp
     src/core/MMU.cpp
+    src/core/isa/Riscv32Backend.cpp
+    src/core/isa/Aarch32Backend.cpp
+    src/core/isa/IsaFactory.cpp
 )
 
 if(BUILD_GUI)
@@ -88,12 +91,16 @@ add_cpu_test(call_ret_elf_test tests/call_ret_elf_test.cpp)
 add_cpu_test(executable_mode_test tests/executable_mode_test.cpp)
 add_cpu_test(trap_test tests/trap_test.cpp)
 add_cpu_test(mmu_test tests/mmu_test.cpp)
+add_cpu_test(aarch32_decode_test tests/aarch32_decode_test.cpp)
 
 find_program(RISCV_GCC NAMES riscv64-elf-gcc riscv32-unknown-elf-gcc
+    PATHS /opt/homebrew/bin /usr/local/bin)
+find_program(ARM_GCC NAMES arm-none-eabi-gcc
     PATHS /opt/homebrew/bin /usr/local/bin)
 
 enable_testing()
 add_test(NAME rvc_expand_test COMMAND $<TARGET_FILE:rvc_expand_test>)
+add_test(NAME aarch32_decode_test COMMAND $<TARGET_FILE:aarch32_decode_test>)
 add_test(NAME m_ext_syscall COMMAND $<TARGET_FILE:cpusim> ${CMAKE_SOURCE_DIR}/instruction_memory/instMem-m-ext.txt)
 set_tests_properties(m_ext_syscall PROPERTIES PASS_REGULAR_EXPRESSION "Syscall exit code: 42")
 add_test(NAME golden_kernel_test COMMAND $<TARGET_FILE:golden_kernel_test>
@@ -102,6 +109,16 @@ add_test(NAME load_use_test COMMAND $<TARGET_FILE:load_use_test>
     ${CMAKE_SOURCE_DIR}/instruction_memory/instMem-load-use.txt)
 add_test(NAME forwarding_test COMMAND $<TARGET_FILE:forwarding_test>
     ${CMAKE_SOURCE_DIR}/instruction_memory/instMem-forward.txt)
+add_test(NAME load_use_arm_test COMMAND $<TARGET_FILE:load_use_test>
+    ${CMAKE_SOURCE_DIR}/instruction_memory/instMem-load-use-arm.txt)
+add_test(NAME forwarding_arm_test COMMAND $<TARGET_FILE:forwarding_test>
+    ${CMAKE_SOURCE_DIR}/instruction_memory/instMem-forward-arm.txt)
+add_test(NAME svc_exit_arm COMMAND $<TARGET_FILE:cpusim>
+    ${CMAKE_SOURCE_DIR}/instruction_memory/instMem-svc-exit-arm.txt --isa arm)
+set_tests_properties(svc_exit_arm PROPERTIES PASS_REGULAR_EXPRESSION "Syscall exit code: 42")
+add_test(NAME mul_svc_arm COMMAND $<TARGET_FILE:cpusim>
+    ${CMAKE_SOURCE_DIR}/instruction_memory/instMem-mul-svc-arm.txt --isa arm)
+set_tests_properties(mul_svc_arm PROPERTIES PASS_REGULAR_EXPRESSION "Syscall exit code: 42")
 add_test(NAME fpu_decode_test COMMAND $<TARGET_FILE:fpu_decode_test>)
 add_test(NAME executable_mode_test COMMAND $<TARGET_FILE:executable_mode_test>)
 add_test(NAME trap_test COMMAND $<TARGET_FILE:trap_test>)
@@ -143,4 +160,42 @@ if(RISCV_GCC)
       "\"${CMAKE_SOURCE_DIR}/scripts/build_example_elf.sh\" && \
        \"$<TARGET_FILE:cpusim>\" \"${CMAKE_BINARY_DIR}/hello.elf\" --bench --json --max-cycles 50000")
   set_tests_properties(bench_smoke_test PROPERTIES PASS_REGULAR_EXPRESSION "\"syscall_exit_code\":42")
+endif()
+
+if(ARM_GCC)
+  add_test(
+    NAME hello_arm_elf_test
+    COMMAND bash -c
+      "\"${CMAKE_SOURCE_DIR}/scripts/build_example_elf_arm.sh\" && \
+       \"$<TARGET_FILE:hello_elf_test>\" \"${CMAKE_BINARY_DIR}/hello_arm.elf\"")
+  add_test(
+    NAME hello_arm_cpusim
+    COMMAND bash -c
+      "\"${CMAKE_SOURCE_DIR}/scripts/build_example_elf_arm.sh\" && \
+       \"$<TARGET_FILE:cpusim>\" \"${CMAKE_BINARY_DIR}/hello_arm.elf\" --max-cycles 50000")
+  set_tests_properties(hello_arm_cpusim PROPERTIES PASS_REGULAR_EXPRESSION "Syscall exit code: 42")
+  add_test(
+    NAME call_ret_arm_elf_test
+    COMMAND bash -c
+      "\"${CMAKE_SOURCE_DIR}/scripts/build_example_elf_arm.sh\" && \
+       \"$<TARGET_FILE:call_ret_elf_test>\" \"${CMAKE_BINARY_DIR}/call_ret_arm.elf\"")
+  set_tests_properties(call_ret_arm_elf_test PROPERTIES PASS_REGULAR_EXPRESSION "call_ret_elf_test ok")
+  add_test(
+    NAME fib_print_arm_cpusim
+    COMMAND bash -c
+      "\"${CMAKE_SOURCE_DIR}/scripts/build_example_elf_arm.sh\" && \
+       \"$<TARGET_FILE:cpusim>\" \"${CMAKE_BINARY_DIR}/fib_print_arm.elf\" --max-cycles 200000")
+  set_tests_properties(fib_print_arm_cpusim PROPERTIES PASS_REGULAR_EXPRESSION "Syscall exit code: 0")
+  add_test(
+    NAME count_primes_arm_cpusim
+    COMMAND bash -c
+      "\"${CMAKE_SOURCE_DIR}/scripts/build_example_elf_arm.sh\" && \
+       \"$<TARGET_FILE:cpusim>\" \"${CMAKE_BINARY_DIR}/count_primes_arm.elf\" --max-cycles 1500000")
+  set_tests_properties(count_primes_arm_cpusim PROPERTIES PASS_REGULAR_EXPRESSION "Syscall exit code: 0")
+  add_test(
+    NAME bench_smoke_arm_test
+    COMMAND bash -c
+      "\"${CMAKE_SOURCE_DIR}/scripts/build_example_elf_arm.sh\" && \
+       \"$<TARGET_FILE:cpusim>\" \"${CMAKE_BINARY_DIR}/hello_arm.elf\" --bench --json --max-cycles 50000")
+  set_tests_properties(bench_smoke_arm_test PROPERTIES PASS_REGULAR_EXPRESSION "\"syscall_exit_code\":42")
 endif()

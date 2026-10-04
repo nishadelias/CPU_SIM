@@ -1,10 +1,11 @@
-// Smoke test: RV32 ELF load + run (same path as GUI SimulatorController).
+// Smoke test: ELF load + run (RV32 or AArch32 via e_machine).
 #include "CPU.h"
 #include "MemoryIf.h"
 #include "Cache.h"
 #include "MemoryMap.h"
 #include "ElfLoader.h"
 #include "ExecutionMode.h"
+#include "isa/IsaFactory.h"
 #include "test_common.h"
 
 #include <cstdio>
@@ -28,12 +29,13 @@ int main(int argc, char** argv) {
 
     DirectMappedCache dcache(&dram, 4 * 1024, 32);
     CPU cpu;
+    cpu.set_isa(isa_kind_from_elf_machine(lr.machine));
     cpu.set_data_memory(&dcache);
     cpu.set_ram_size(MemoryMap::RAM_SIZE);
     cpu.set_use_hex_bounds(false);
     cpu.set_pc(lr.entry);
     cpu.set_heap_brk(lr.heap_brk);
-    cpu.set_register_value(2, static_cast<int32_t>(MemoryMap::STACK_TOP - 16));
+    cpu.set_register_value(cpu.isa().sp_index(), static_cast<int32_t>(MemoryMap::STACK_TOP - 16));
     cpu.set_execution_mode(ExecutionMode::Educational);
 
     const int max_cycles = TestCommon::DEFAULT_TEST_MAX_CYCLES;

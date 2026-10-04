@@ -1,8 +1,13 @@
-# RISC-V CPU Simulator
+# RISC-V & AArch32 CPU Simulator
 
 [![CI](https://github.com/nishadelias/CPU_SIM/actions/workflows/ci.yml/badge.svg)](https://github.com/nishadelias/CPU_SIM/actions/workflows/ci.yml)
 
-A comprehensive, cycle-accurate RISC-V CPU simulator with a graphical user interface. This project simulates a 5-stage pipelined RISC-V processor, complete with cache memory, instruction execution, and detailed performance statistics. Perfect for learning computer architecture, understanding how CPUs work, and visualizing pipeline execution.
+A cycle-accurate educational CPU simulator with a graphical user interface. It simulates a **5-stage pipelined** processor for **two ISAs**:
+
+- **RV32** (RISC-V) — RV32IMCF-class teaching subset
+- **AArch32** (ARMv7-A, A32 encodings) — integer + multiply + common load/store/branch/SVC
+
+Both share the same pipeline shell, cache schemes, and branch predictors. Load an ELF and the simulator selects the ISA from `e_machine` (`EM_RISCV` or `EM_ARM`).
 
 **✨ Key Educational Features**: The simulator includes **extensible frameworks** that allow you to easily implement and test your own custom components! 
 - **Cache Framework**: Compare built-in schemes (direct-mapped, fully associative, set-associative) or write your own to experiment with different replacement policies, write policies, and cache organizations.
@@ -10,16 +15,16 @@ A comprehensive, cycle-accurate RISC-V CPU simulator with a graphical user inter
 
 ## 📖 What is This Project?
 
-This project simulates a **RISC-V CPU** - a simplified but realistic processor that executes RISC-V assembly instructions. It includes:
+This project simulates a **pipelined CPU** for **RISC-V (RV32)** and **AArch32 (ARMv7-A A32)** — simplified but realistic processors that execute compiled bare-metal ELF programs (or RISC-V hex teaching files). It includes:
 
-- **5-Stage Pipeline**: Simulates how modern CPUs process instructions through Fetch, Decode, Execute, Memory, and Writeback stages
+- **5-Stage Pipeline**: Fetch, Decode, Execute, Memory, and Writeback (shared shell; ISA-specific decode/execute)
+- **Dual ISA**: RV32IMCF-class RISC-V and educational AArch32 (integer/mul/load-store/branch/SVC + CPSR)
 - **Multiple Cache Schemes**: Compare different cache organizations (Direct-mapped, Fully Associative, Set-Associative) with performance metrics
 - **Extensible Cache Framework**: **Easily add your own custom cache schemes!** The framework makes it simple to implement new cache replacement policies, write policies, or organizational structures for educational experiments
 - **Multiple Branch Predictors**: Compare different branch prediction algorithms (Always Not Taken, Always Taken, Bimodal, GShare, Tournament) with accuracy metrics
 - **Extensible Branch Predictor Framework**: **Easily add your own custom branch predictors!** The framework makes it simple to implement new prediction algorithms, history mechanisms, or hybrid approaches for educational experiments
-- **RV32IMCF-class ISA**: Integer (RV32I), multiply/divide (M), 16-bit compressed (C), single-precision float (F), plus syscall emulation and a Zicsr subset for **FCSR**
-- **Graphical Interface**: Visualize pipeline execution, register values, memory accesses, and statistics in real-time
-- **Command-Line Interface**: Run simulations from the terminal with detailed logging
+- **Graphical Interface**: Visualize pipeline execution, register values (including ARM CPSR flags), memory accesses, and statistics in real-time
+- **Command-Line Interface**: Run simulations from the terminal with `--isa riscv|arm` and detailed logging
 
 ## 🚀 Quick Start
 
@@ -64,6 +69,7 @@ sudo apt-get install qt6-base-dev qt6-charts-dev cmake build-essential
 This simulator is designed for computer architecture courses where students visualize pipeline behavior and experiment with cache and branch-predictor designs.
 
 - **[INSTRUCTOR.md](INSTRUCTOR.md)** — 10-minute demo script, model assumptions, recommended programs, and student extension workflow
+- **[VIDEO_SCRIPTS.md](VIDEO_SCRIPTS.md)** — 4-video recording scripts for educational demos
 - **[CACHE_SCHEMES.md](CACHE_SCHEMES.md)** — how to add custom cache replacement policies
 - **[BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md)** — how to add custom branch predictors
 - **[GUI_BUILD.md](GUI_BUILD.md)** — Qt build instructions
@@ -147,12 +153,12 @@ The simulator uses a **single 64 KiB RAM** at address `0x00000000`. Instruction 
 | Kind | How it is detected | Typical use |
 |------|--------------------|-------------|
 | **ELF** | File starts with the ELF magic bytes `7F 45 4C 46` | Programs compiled and linked for this environment (see below) |
-| **Hex text** | Anything else | **Educational** mode: same format as the files in `instruction_memory/` (whitespace-separated **two hex digits per byte**, little-endian instruction encoding) |
+| **Hex text** | Anything else | **Educational** mode: whitespace-separated **two hex digits per byte**, little-endian. Filenames containing `arm` / `aarch` use **AArch32** encodings; others use **RISC-V** |
 
-- **GUI (and `cpusim`)** choose the loader automatically: **no separate “mode” switch** — open the `.elf` or `.txt` / `.hex` file.
+- **GUI (and `cpusim`)** choose the loader automatically: **no separate “mode” switch** — open the `.elf` or `.txt` / `.hex` file. Hex ISA is inferred from the filename (`*arm*` → AArch32).
 - After opening, the **File** panel shows a line such as:
-  - **ELF (compiled C/RISC-V)** — entry address, stack pointer, and program break (`brk`) are set for you.
-  - **Hex text (instruction memory)** — byte count and load address `0x00000000`.
+  - **ELF (RISC-V or AArch32/ARM)** — entry address, stack pointer, and program break (`brk`) are set for you; ISA is chosen from the ELF machine type.
+  - **Hex text (RISC-V or AArch32 encodings)** — byte count and load address `0x00000000`.
 
 ### Compiling your own RISC-V programs for CPU_SIM
 
@@ -199,6 +205,7 @@ This produces:
 | `build/hello.elf` | `examples/hello.c` | Exits with code 42 (short smoke test) |
 | `build/fib_print.elf` | `examples/fib_print.c` | 24 Fibonacci lines to stdout (~140 cycles) |
 | `build/count_primes.elf` | `examples/count_primes.c` | Counts primes 2..400 (~30k+ cycles; nested loops + multiply) |
+| `build/call_ret.elf` | `crt0.S` + `call_ret_main.c` | `main` + `call`/`ret` smoke (exit 42) |
 
 Run in CLI or GUI:
 
@@ -226,23 +233,63 @@ riscv64-elf-gcc -march=rv32im -mabi=ilp32 -nostdlib \
 
 If `my_program.c` is in the project root, add `-I examples` when using `#include "simlib.h"`.
 
-**Alternative: `crt0` + `main`** — link [`examples/crt0.S`](examples/crt0.S) with your `main()`:
+### Compiling AArch32 (ARM) programs for CPU_SIM
+
+Same flat **64 KiB RAM @ 0** model, but **ELF `EM_ARM`** and the AArch32 backend. Teaching examples mirror the RISC-V set (hello / fib_print / count_primes / call_ret).
+
+| Platform | Install |
+|----------|---------|
+| macOS (Homebrew) | `brew install arm-none-eabi-gcc` |
+| Linux | `sudo apt install gcc-arm-none-eabi` |
+
+Flags: `-march=armv7-a -mfloat-abi=soft -marm`. Syscalls use **r7** / **r0–r2** via [`examples/simlib_arm.h`](examples/simlib_arm.h) (numbers 93/64/214). Linker: [`examples/linker_arm.ld`](examples/linker_arm.ld).
+
+```bash
+./scripts/build_example_elf_arm.sh
+```
+
+| Output | Source | What it does |
+|--------|--------|----------------|
+| `build/hello_arm.elf` | `examples/hello_arm.c` | Exit 42 |
+| `build/fib_print_arm.elf` | `examples/fib_print_arm.c` | Same 24 Fibonacci lines as RV |
+| `build/count_primes_arm.elf` | `examples/count_primes_arm.c` | Primes 2..400 (soft rem; ~900k cycles — raise `--max-cycles`) |
+| `build/call_ret_arm.elf` | `crt0_arm.S` + `call_ret_main_arm.c` | `main` + `BL`/`BX lr` smoke |
+
+```bash
+./build/cpusim build/hello_arm.elf --max-cycles 50000
+./build/cpusim build/count_primes_arm.elf --max-cycles 1500000
+./build/cpusim build/hello_arm.elf --isa arm   # optional override
+```
+
+**AArch32 hex teaching files** (no cross-compiler): `instruction_memory/instMem-forward-arm.txt`, `instMem-load-use-arm.txt`, `instMem-svc-exit-arm.txt`, `instMem-mul-svc-arm.txt`. Filenames containing `arm` select AArch32 automatically in GUI and CLI.
+
+**v1 coverage:** data-processing, MUL/MLA, LDR/STR (+byte/half), LDM/STM, B/BL/BX, SVC, MOVW/MOVT, CPSR NZCV, conditional execution. **Not in v1:** Thumb, AArch64, NEON/VFP. Avoid `%` / `/` in C — libgcc pulls Thumb helpers; `count_primes_arm.c` uses an inlined soft remainder for that reason.
+
+**Alternative: `crt0` + `main`** — RISC-V:
 
 ```bash
 riscv64-elf-gcc -march=rv32im -mabi=ilp32 -nostdlib -T examples/linker.ld \
   examples/crt0.S my_program.c -o build/my_program.elf
 ```
 
-Programs that save/restore `ra` on the stack (`call`/`ret` with a normal prologue) may misbehave until pipeline forwarding is improved; prefer the `_start` + `simlib.h` style for reliable demos.
+AArch32:
 
-**Do not** use host `gcc` or link macOS/Linux x86 binaries — only **RV32 ELF** for this memory map will load.
+```bash
+arm-none-eabi-gcc -march=armv7-a -mfloat-abi=soft -marm -nostdlib \
+  -T examples/linker_arm.ld examples/crt0_arm.S my_program.c \
+  -o build/my_program_arm.elf -lgcc
+```
+
+Programs that save/restore `ra`/`lr` on the stack (`call`/`ret` or `BL` with a normal prologue) may misbehave until pipeline forwarding is improved; prefer the `_start` + `simlib` style for reliable demos.
+
+**Do not** use host `gcc` or link macOS/Linux x86/ARM64 binaries — only **RV32** or **AArch32** ELF for this memory map will load.
 
 #### 5. Load and run in the GUI
 
 1. Build the simulator with the GUI enabled: `cmake -S . -B build -DBUILD_GUI=ON && cmake --build build --target cpusim_gui`
 2. Launch `./build/cpusim_gui` (not an older copy from another build folder)
 3. **Open Program** or drag-and-drop your `.elf`
-4. Confirm the file line shows **ELF (compiled C/RISC-V)** with entry and `brk`
+4. Confirm the file line shows **ELF (RISC-V)** or **ELF (AArch32/ARM)** with entry and `brk`
 5. Click **Start** or **Step** — watch **Pipeline**, **Registers**, **Statistics**
 6. If your program calls **write** to fd 1, text appears in **Program Output**
 
@@ -258,7 +305,7 @@ CLI sanity check before using the GUI:
 |---------|----------------|
 | “Could not load program” | Not RV32 ELF, segments > 64 KiB, or wrong endianness |
 | **Program Output** empty | Program never called `write` (exit-only programs are normal) |
-| Simulation stops at 200k cycles | GUI cycle cap; shorten loops or raise `MAX_CYCLES` in `SimulatorController` |
+| Simulation stops at the cycle cap | GUI / CLI default is 1M cycles (`SimLimits::DEFAULT_MAX_CYCLES`); raise it for long ARM labs (`count_primes_arm` needs ~900k+) |
 | `call main` / `ret` loops forever | Known forwarding issue with stack-saved `ra`; use `_start` + `simlib.h` pattern |
 | `riscv64-elf-gcc` not found | Install toolchain; add `/opt/homebrew/bin` to `PATH` on macOS |
 
@@ -342,8 +389,9 @@ CLI sanity check before using the GUI:
      - Instruction distribution pie chart
    
    - **Register File Tab**:
-     - Current values of all 32 RISC-V registers (x0-x31)
-     - ABI names (zero, ra, sp, gp, tp, t0-t6, s0-s11, a0-a7)
+     - Current values of all GPRs for the loaded ISA (**x0–x31** for RISC-V, **r0–r15** for AArch32)
+     - ABI names from the active ISA backend
+     - For AArch32: **CPSR** N/Z/C/V flags shown below the table
      - Highlights recently changed registers
    
    - **Memory Access History Tab**:
@@ -423,12 +471,13 @@ CPU_SIM/
 │       └── cpusim.cpp     # Command-line simulator entry point
 ├── gui/                   # Qt6 GUI (visualization layer)
 ├── tests/                 # Unit and integration tests
-├── examples/              # Sample RV32 C programs + linker script
-├── instruction_memory/    # Hex programs for teaching/tests
-├── scripts/               # build_example_elf.sh, demo.sh, CI helpers
+├── examples/              # Sample RV32 + AArch32 C programs, simlib, linkers, crt0
+├── instruction_memory/    # Hex programs for teaching/tests (RV + *-arm.txt)
+├── scripts/               # build_example_elf{,_arm}.sh, demo.sh, integration helpers
 ├── CMakeLists.txt
 ├── CACHE_SCHEMES.md
 ├── BRANCH_PREDICTORS.md
+├── VIDEO_SCRIPTS.md
 └── INSTRUCTOR.md
 ```
 
@@ -448,18 +497,31 @@ CPU_SIM/
 
 **Running arbitrary compiled C** still depends on your libc/runtime: only the above syscalls and memory model are emulated—link with [`examples/linker.ld`](examples/linker.ld) (or equivalent) so **PT_LOAD** segments fit in **64 KiB** at `0x00000000`.
 
+### AArch32 (v1) — educational A32 subset
+
+**Data-processing**: AND/EOR/SUB/RSB/ADD/ADC/SBC/RSC/TST/TEQ/CMP/CMN/ORR/MOV/BIC/MVN with immediate or shifted register operand2; optional **S** flag updates; full **condition codes** on every instruction.
+
+**Multiply**: `MUL`, `MLA`.
+
+**Load/store**: `LDR`/`STR` (word), byte/half variants, immediate and simple register offset; `LDM`/`STM` (including push/pop-style forms).
+
+**Control**: `B` / `BL` / `BX`, `SVC #0` (same educational syscall numbers as RV: 93/64/214), `MOVW` / `MOVT`, **CPSR** NZCV.
+
+**Not in v1**: Thumb/Thumb-2, AArch64, NEON/VFP, `SDIV`/`UDIV`, long multiply. Soft-float C that needs libgcc division will pull **Thumb** helpers — keep demos integer-only or use inlined soft rem (see `count_primes_arm.c`).
+
 **Execution environment (summary)**  
 | Item | Value |
 |------|--------|
-| ISA | RV32IMC-oriented (optional F; see limitations above) |
+| ISA | Dual: **RV32IMC**-oriented (optional F) **or** educational **AArch32 A32** |
 | RAM | 64 KiB byte-addressable, base `0x00000000` |
 | Instruction fetch | Same physical RAM as data (unified address space) |
-| `ExecutionMode` | **Educational** (default): unknown primary opcodes as NOP. **Executable** (`--executable`): faults on illegal instructions / bad memory accesses. |
+| Registers | RV: x0–x31; AArch32: r0–r15 + CPSR NZCV |
+| `ExecutionMode` | **Educational** (default): unknown / failed-condition ops as NOP. **Executable** (`--executable`): faults on illegal instructions / bad memory accesses. |
 
 ### Architecture Components
 
-- **5-Stage Pipeline**: IF (Instruction Fetch), ID (Decode), EX (Execute), MEM (Memory), WB (Writeback)
-- **32-bit RISC-V Architecture**: Full 32-register file (x0-x31)
+- **5-Stage Pipeline**: IF (Instruction Fetch), ID (Decode), EX (Execute), MEM (Memory), WB (Writeback) — shared shell for both ISAs
+- **Dual ISA backends**: RISC-V RV32 and AArch32 A32 (selected from ELF `e_machine` or hex filename / `--isa`)
 - **Multiple Cache Schemes**: 
   - Direct-Mapped Cache (1-way set associative)
   - Fully Associative Cache (LRU replacement)
@@ -530,8 +592,9 @@ This simulator prioritizes teaching clarity over full ISA compliance:
 - **Unified cache** — single 4 KiB / 32-byte-line cache for both instruction fetch and data access (not split I/D)
 - **Write-through only** — no write-back or write-no-allocate policies built in
 - **Partial RV32IMCF** — not a formal compliance suite; see [Features](#-features) for supported instructions
-- **`call main` / `ret`** — programs that save/restore `ra` on the stack may misbehave due to a forwarding limitation; use the `_start` + [examples/simlib.h](examples/simlib.h) pattern for reliable demos
-- **Branch prediction scope** — only conditional branches (`BEQ`, `BNE`, etc.); JAL/JALR always taken and bypass the predictor
+- **AArch32 v1 only** — no Thumb, VFP/NEON, or AArch64; soft-float division via libgcc is unsupported (Thumb helpers)
+- **`call` / `ret` / `BL` with stack-saved link** — may misbehave due to a forwarding limitation; use `_start` + [examples/simlib.h](examples/simlib.h) / [simlib_arm.h](examples/simlib_arm.h) for reliable demos
+- **Branch prediction scope** — conditional branches only; unconditional jumps bypass the predictor
 - **No miss-cycle penalty** — cache misses are counted in statistics but do not add extra stall cycles
 
 ## 🧪 Tests
@@ -539,29 +602,33 @@ This simulator prioritizes teaching clarity over full ISA compliance:
 **CMake / CTest** (after `cmake -B build`):
 
 - `rvc_expand_test` — compressed expansion goldens
+- `aarch32_decode_test` — AArch32 decode / CPSR condition goldens
 - `m_ext_syscall` — `instruction_memory/instMem-m-ext.txt` (`MUL` + `ECALL` exit)
+- `svc_exit_arm`, `mul_svc_arm` — AArch32 hex SVC / MUL+SVC smokes
 - `golden_kernel_test` — same hex kernel as above, asserts syscall exit code 42
-- `hello_elf_test` — ELF load + run via CPU API (requires RISC-V cross-compiler at configure time)
-- `load_use_test`, `forwarding_test` — pipeline hazard hex kernels
+- `hello_elf_test` / `hello_arm_elf_test` — ELF load + run via CPU API (requires matching cross-compiler)
+- `load_use_test`, `forwarding_test` — pipeline hazard hex kernels (RV)
+- `load_use_arm_test`, `forwarding_arm_test` — same hazards with AArch32 hex
 - `fpu_decode_test`, `trap_test`, `mmu_test`, `executable_mode_test`
-- `call_ret_elf_test` — `crt0.S` + `main` with normal `call`/`ret` (requires cross-compiler)
-- `fib_print_cpusim`, `count_primes_cpusim`, `bench_smoke_test` — integration smokes (with cross-compiler)
+- `call_ret_elf_test` / `call_ret_arm_elf_test` — crt0 + `main` (requires cross-compiler)
+- `fib_print_cpusim`, `count_primes_cpusim`, `bench_smoke_test` — RV integration smokes
+- `fib_print_arm_cpusim`, `count_primes_arm_cpusim`, `bench_smoke_arm_test` — ARM integration smokes
 
-**Scripts**: `scripts/run_riscv_integration.sh` (bash) rebuilds, runs **ctest**, and checks syscall output.
+**Scripts**: `scripts/run_riscv_integration.sh` and `scripts/run_arm_integration.sh` rebuild, run **ctest**, and check syscall output. `scripts/demo.sh` runs predictor/cache comparisons for both ISAs when toolchains are present.
 
 **Windows:** Run the same tests manually: `ctest --test-dir build` from the project root after configuring and building.
 
-**Sample hex programs** live under `instruction_memory/` (e.g. `instMem-m-ext.txt`, `instMem-forward.txt`, `instMem-load-use.txt`, `instMem-rvc-smoke.txt`).
+**Sample hex programs** live under `instruction_memory/` (RV: `instMem-m-ext.txt`, `instMem-forward.txt`, `instMem-load-use.txt`, …; ARM: `instMem-*-arm.txt`).
 
 ## 🔧 Technical Details
 
 ### Architecture Specifications
 
-- **ISA**: RISC-V **RV32IMCF**-oriented (see limitations above); not a complete formal compliance suite
+- **ISA**: Dual — RISC-V **RV32IMCF**-oriented and educational **AArch32 A32** (see limitations above); not a complete formal compliance suite
 - **Endianness**: Little-endian byte ordering
 - **Memory**: 64KB main memory (RAM), byte-addressable
-- **Registers**: 32 general-purpose registers (x0 always zero)
-- **Pipeline**: 5-stage pipeline with hazard detection
+- **Registers**: RV x0–x31 (x0 hardwired zero); AArch32 r0–r15 + CPSR NZCV
+- **Pipeline**: 5-stage pipeline with hazard detection (shared)
 - **Cache**: Selectable cache scheme (Direct-mapped, Fully Associative, or Set-Associative)
   - Default: 4KB cache with 32-byte lines
   - Write-through and write-allocate policies
@@ -595,12 +662,13 @@ This simulator is excellent for learning:
   - Compare different branch predictors (Always Not Taken vs. Bimodal vs. GShare vs. Tournament)
   - Understand prediction mechanisms (saturating counters, history registers, hybrid approaches)
   - See how prediction accuracy affects pipeline performance
-- **RISC-V ISA**: Instruction encoding and execution
+- **RISC-V and AArch32 ISAs**: Instruction encoding and execution in the same pipeline shell
 - **Performance Analysis**: Understanding CPI, cache hit rates, branch prediction accuracy, and pipeline efficiency
 
 For detailed guides, see:
 - [CACHE_SCHEMES.md](CACHE_SCHEMES.md) - Cache schemes framework
 - [BRANCH_PREDICTORS.md](BRANCH_PREDICTORS.md) - Branch predictors framework
+- [VIDEO_SCRIPTS.md](VIDEO_SCRIPTS.md) - Educational demo video scripts
 
 ## 🐛 Troubleshooting
 
@@ -618,7 +686,7 @@ For detailed guides, see:
 
 - **Speed slider stops at 100**: You are likely running an old `cpusim_gui` binary. Reconfigure with `-DBUILD_GUI=ON`, then `cmake --build build --target cpusim_gui` and run `./build/cpusim_gui`. The current max is **500 cycles/sec** (see `SimLimits::MAX_SIM_SPEED_CPS`).
 
-- **Program won't load**: Use a valid **hex text** file (non-empty hex byte pairs) or a **32-bit ELF** linked for `0x00000000` / 64 KiB RAM. If the dialog fails, read the error message — ELF must be **EM_RISCV** with **PT_LOAD** segments that fit.
+- **Program won't load**: Use a valid **hex text** file (non-empty hex byte pairs) or a **32-bit ELF** linked for `0x00000000` / 64 KiB RAM. If the dialog fails, read the error message — ELF must be **EM_RISCV** or **EM_ARM** with **PT_LOAD** segments that fit.
 - **Simulation stuck**: Check the pipeline log file (`pipeline.log`) for details
 - **No updates**: Make sure you've clicked "Start" or "Step" to begin execution
 
@@ -642,6 +710,7 @@ Possible extensions:
 - Full **RV32F** coverage (unsigned conversions, sign-injection variants, all rounding modes)
 - Precise **IEEE 754** exception flags and full **FCSR** behavior
 - Exceptions, interrupts, **U-mode** / virtual memory
+- **AArch32** Thumb-2, VFP/NEON, and richer multiply/divide
 - Additional syscalls (`read`, `open`, …) if you target a richer libc
 - Multi-level caches, write-back policies, more predictors
 
@@ -663,6 +732,6 @@ This project is licensed under the [MIT License](LICENSE) and available for educ
 
 ---
 
-**Built with passion for computer architecture and RISC-V technology** 🖥️⚡
+**Built with passion for computer architecture — RISC-V and AArch32** 🖥️⚡
 
 For detailed GUI build instructions, see [GUI_BUILD.md](GUI_BUILD.md).
